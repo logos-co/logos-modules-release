@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "name": "CHANGE-ME-modules",
-  "displayName": "CHANGE ME — My Logos Modules",
-  "description": "A short human description of this module catalog.",
-  "homepage": "https://example.com/modules",
-  "indexUrl": "https://github.com/CHANGE-ME-OWNER/CHANGE-ME-REPO/releases/download/index/index.json",
+  "name": "logos-modules-official",
+  "displayName": "Logos Official",
+  "description": "Curated official Logos modules.",
+  "homepage": "https://github.com/logos-co/logos-modules-release",
+  "indexUrl": "https://github.com/logos-co/logos-modules-release/releases/download/index/index.json",
   "trustedSigners": []
 }
