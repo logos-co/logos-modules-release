@@ -55,3 +55,6 @@
 [submodule "submodules/logos-wallet-ui"]
 	path = submodules/logos-wallet-ui
 	url = https://github.com/logos-co/logos-wallet-ui
+[submodule "submodules/openmetrics-module"]
+	path = submodules/openmetrics-module
+	url = https://github.com/logos-co/openmetrics-module
