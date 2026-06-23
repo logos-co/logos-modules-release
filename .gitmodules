@@ -58,3 +58,9 @@
 [submodule "submodules/openmetrics-module"]
 	path = submodules/openmetrics-module
 	url = https://github.com/logos-co/openmetrics-module
+[submodule "submodules/lez-indexer-module"]
+	path = submodules/lez-indexer-module
+	url = https://github.com/logos-blockchain/lez-indexer-module
+[submodule "submodules/lez-explorer-ui"]
+	path = submodules/lez-explorer-ui
+	url = https://github.com/logos-blockchain/lez-explorer-ui
