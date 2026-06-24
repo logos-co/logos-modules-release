@@ -23,6 +23,7 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-delivery-module` | logos-co |
 | `logos-execution-zone-module` | logos-blockchain |
 | `logos-execution-zone-wallet-ui` | logos-blockchain |
+| `logos-libp2p-module` | logos-co |
 | `logos-storage-module` | logos-co |
 | `logos-storage-ui` | logos-co |
 | `logos-wallet-module` | logos-co |
