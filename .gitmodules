@@ -67,3 +67,11 @@
 [submodule "submodules/logos-libp2p-module"]
 	path = submodules/logos-libp2p-module
 	url = https://github.com/logos-co/logos-libp2p-module
+[submodule "submodules/logos-chat-module-mix"]
+	path = submodules/logos-chat-module-mix
+	url = https://github.com/logos-co/logos-chat-module
+	branch = feat/logos-testnetv02-mix
+[submodule "submodules/logos-chat-ui-mix"]
+	path = submodules/logos-chat-ui-mix
+	url = https://github.com/logos-co/logos-chat-ui
+	branch = feat/logos-testnetv02-mix

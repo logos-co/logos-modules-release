@@ -19,7 +19,9 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-blockchain-module` | logos-blockchain |
 | `logos-blockchain-ui` | logos-blockchain |
 | `logos-chat-module` | logos-co |
+| `logos-chat-module-mix` | logos-co (`feat/logos-testnetv02-mix`) |
 | `logos-chat-ui` | logos-co |
+| `logos-chat-ui-mix` | logos-co (`feat/logos-testnetv02-mix`) |
 | `logos-delivery-module` | logos-co |
 | `logos-execution-zone-module` | logos-blockchain |
 | `logos-execution-zone-wallet-ui` | logos-blockchain |
