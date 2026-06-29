@@ -14,6 +14,8 @@ by fetching `logos-repo.json` from the default branch root.
 
 | Module | Source |
 |---|---|
+| `lez-explorer-ui` | logos-blockchain |
+| `lez-indexer-module` | logos-blockchain |
 | `logos-accounts-module` | logos-co |
 | `logos-accounts-ui` | logos-co |
 | `logos-blockchain-module` | logos-blockchain |
