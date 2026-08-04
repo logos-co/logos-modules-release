@@ -1,0 +1,20 @@
+name: Release swap
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Force build — replace the current published release if it has the same version."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/_release-module.yml
+    with:
+      module_path: submodules/eth-lez-atomic-swaps/swap-module
+      force_build: ${{ inputs.force_build }}
+    secrets: inherit

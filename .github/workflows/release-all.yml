@@ -4,9 +4,9 @@ name: Release all modules
 # parallel. Useful for the initial bootstrap and for coordinated
 # "everything at once" releases.
 #
-# The module list is DISCOVERED from `.gitmodules` at run time — add or
-# remove a submodule and this workflow tracks it automatically, no edits
-# here ever needed (the previous hand-maintained matrix is gone).
+# The module list is DISCOVERED from `.gitmodules` at run time. Most source
+# repositories contain one root module; an application repository can declare
+# multiple immediate-child modules without being cloned during discovery.
 #
 # Each module is released through the same _release-module.yml local
 # reusable workflow the per-module files use, so signing config stays
@@ -37,21 +37,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Every `path = submodules/<repo>` entry in .gitmodules.
-          paths="$(git config --file .gitmodules --get-regexp 'submodule\..*\.path$' 2>/dev/null \
-                   | awk '{print $2}' | sort -u || true)"
-          if [ -z "${paths}" ]; then
-            echo 'matrix={"module_path":[]}' >> "$GITHUB_OUTPUT"
-            echo 'count=0' >> "$GITHUB_OUTPUT"
-            echo "No submodules declared in .gitmodules — nothing to release."
-            exit 0
-          fi
-          matrix="$(printf '%s\n' ${paths} | jq -R . | jq -cs '{module_path: .}')"
-          count="$(printf '%s\n' ${paths} | wc -l | tr -d ' ')"
+          paths="$(./scripts/discover-modules.sh)"
+          matrix="$(jq -c '{module_path: .}' <<< "${paths}")"
+          count="$(jq -r 'length' <<< "${paths}")"
           echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
           echo "count=${count}"  >> "$GITHUB_OUTPUT"
           echo "Discovered ${count} module(s):"
-          printf '  %s\n' ${paths}
+          jq -r '.[] | "  \(.)"' <<< "${paths}"
 
   release:
     needs: discover

@@ -32,3 +32,12 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-storage-ui` | logos-co |
 | `logos-wallet-module` | logos-co |
 | `logos-wallet-ui` | logos-co |
+| `swap` | logos-co (`eth-lez-atomic-swaps/swap-module`) |
+| `swap-ui` | logos-co (`eth-lez-atomic-swaps/swap-ui`) |
+
+`scripts/add-module.sh` handles both repository layouts. A root
+`metadata.json` produces one release workflow; otherwise each immediate child
+with `metadata.json` is declared in `.gitmodules` and receives its own workflow.
+The umbrella discovery job reads those declarations without cloning every
+source repository, so one unavailable module cannot prevent the other release
+matrix entries from starting.
