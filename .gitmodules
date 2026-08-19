@@ -10,8 +10,10 @@
 ;
 ;   git submodule add https://github.com/<owner>/<repo> submodules/<repo>
 ;
-; `release-all.yml` discovers modules by reading the `path = submodules/*`
-; entries in this file, so you never maintain a build matrix by hand.
+; `release-all.yml` treats each declared repository as one root module unless
+; its section has one or more `module = <immediate-child>` entries. This keeps
+; discovery checkout-free while supporting Basecamp applications that publish
+; multiple modules from one source repository.
 ;
 ; After cloning a fork, materialise the submodule working trees with:
 ;
@@ -63,3 +65,8 @@
 	path = submodules/logos-chat-ui-mix
 	url = https://github.com/logos-co/logos-chat-ui
 	branch = feat/logos-testnetv02-mix
+[submodule "submodules/eth-lez-atomic-swaps"]
+	path = submodules/eth-lez-atomic-swaps
+	url = https://github.com/logos-co/eth-lez-atomic-swaps
+	module = swap-module
+	module = swap-ui
