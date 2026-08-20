@@ -1,14 +1,19 @@
 name: Rebuild index
 
 # Regenerates the rolling `index` release (index.json — the catalog
-# clients fetch) whenever a per-module release fires the
-# `rebuild-index` repository_dispatch event. Also runs on a six-hourly
-# schedule as a catch-up so a missed dispatch can't strand the catalog,
+# clients fetch) whenever a package release is published — including
+# releases published by the Jenkins pipeline, which is why there is a
+# wait job: the release event fires on creation, but the .lgx and
+# sidecar.json assets are uploaded moments later, so we poll until
+# they exist before rebuilding. Also runs on a six-hourly schedule as
+# a catch-up so a missed or timed-out run can't strand the catalog,
 # and can be kicked manually from the Actions UI.
 #
-# Thin passthrough to the versioned action — nothing to configure here.
+# Rebuild itself is a thin passthrough to the versioned action.
 
 on:
+  release:
+    types: [published]
   workflow_dispatch: {}
   repository_dispatch:
     types: [rebuild-index]
@@ -19,9 +24,35 @@ on:
 permissions:
   contents: write
 
+# One rebuild at a time; a burst of release events (multi-module
+# Jenkins run) collapses into the running one plus a single queued run.
+concurrency:
+  group: rebuild-index
+  cancel-in-progress: false
+
 jobs:
+  wait-for-assets:
+    # Only release events need the wait; other triggers pass through.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for release assets
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          for i in $(seq 1 30); do
+            assets=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+                       --jq '[.assets[].name] | join(" ")')
+            case "$assets" in
+              *.lgx*sidecar.json*|*sidecar.json*.lgx*)
+                echo "assets present: $assets"; exit 0 ;;
+            esac
+            echo "waiting for assets on ${TAG} (have: ${assets:-none})"
+            sleep 10
+          done
+          echo "::warning::assets never appeared on ${TAG} — rebuilding anyway; the 6-hourly schedule will catch it if this release lands later"
+
   rebuild:
-    uses: logos-co/logos-modules-release-action/.github/workflows/rebuild-index.yml@v1.8
-    with:
-      # Unset means GitHub-hosted; see "Runners and the Nix cache" in the README.
-      runner: ${{ vars.RELEASE_RUNNER }}
+    needs: wait-for-assets
+    uses: logos-co/logos-modules-release-action/.github/workflows/rebuild-index.yml@v1
