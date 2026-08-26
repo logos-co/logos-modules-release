@@ -63,3 +63,6 @@
 	path = submodules/logos-chat-ui-mix
 	url = https://github.com/logos-co/logos-chat-ui
 	branch = feat/logos-testnetv02-mix
+[submodule "submodules/logos-delivery-demo"]
+	path = submodules/logos-delivery-demo
+	url = https://github.com/logos-co/logos-delivery-demo
