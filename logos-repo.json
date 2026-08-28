@@ -5,5 +5,6 @@
   "description": "Curated official Logos modules.",
   "homepage": "https://github.com/logos-co/logos-modules-release",
   "indexUrl": "https://github.com/logos-co/logos-modules-release/releases/download/index/index.json",
+  "network": "logos.test",
   "trustedSigners": []
 }
