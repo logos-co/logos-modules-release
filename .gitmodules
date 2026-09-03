@@ -66,3 +66,9 @@
 [submodule "submodules/logos-delivery-demo"]
 	path = submodules/logos-delivery-demo
 	url = https://github.com/logos-co/logos-delivery-demo
+[submodule "submodules/logos-amm-module"]
+	path = submodules/logos-amm-module
+	url = https://github.com/logos-blockchain/logos-amm-module
+[submodule "submodules/logos-amm-ui-module"]
+	path = submodules/logos-amm-ui-module
+	url = https://github.com/logos-blockchain/logos-amm-ui-module
