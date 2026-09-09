@@ -1,9 +1,10 @@
 name: _release-module
 
 # Local reusable workflow — the single place that owns this catalog's
-# signing configuration. Every per-module workflow (release-<repo>.yml)
-# and the umbrella (release-all.yml) delegate here, so switching signing
-# modes only means editing THIS file, never the callers.
+# signing configuration and its variant list. Every per-module workflow
+# (release-<repo>.yml) and the umbrella (release-all.yml) delegate here,
+# so switching signing modes or platforms only means editing THIS file,
+# never the callers.
 #
 # The leading underscore marks it "private": it has only `workflow_call`
 # (no `workflow_dispatch`), so it never shows up as a runnable item in
@@ -52,13 +53,23 @@ permissions:
 
 jobs:
   release:
-    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.1
+    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.4
     with:
       module_path: ${{ inputs.module_path }}
 
       # Normal runs skip a version that's already fully published; "Force
       # build" (force_build: true) republishes it by disabling that skip.
       skip_if_published: ${{ !inputs.force_build }}
+
+      # ─── Variants (edit here, not in each caller) ───────────────────
+      # Needs the action at >= v1.4: earlier tags accept `variants` but
+      # have no Windows leg, so the variant schedules an empty runs-on.
+      # windows-x86_64 is a mingw CROSS build — an ordinary Linux runner
+      # produces the PE — and is opt-in upstream, so the full list has to
+      # be spelled out rather than left to the action's default. A module
+      # whose flake does not expose `packages.x86_64-windows` fails only
+      # that leg; the other three still publish as a partial release.
+      variants: "darwin-arm64,linux-amd64,linux-arm64,windows-x86_64"
 
       # ─── Signing mode (edit here, not in each caller) ────────────────
       signing_mode: none
