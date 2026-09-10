@@ -72,3 +72,6 @@
 [submodule "submodules/logos-amm-ui-module"]
 	path = submodules/logos-amm-ui-module
 	url = https://github.com/logos-blockchain/logos-amm-ui-module
+[submodule "submodules/logos-json-rpc-bridge"]
+	path = submodules/logos-json-rpc-bridge
+	url = https://github.com/logos-co/logos-json-rpc-bridge
