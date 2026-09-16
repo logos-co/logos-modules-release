@@ -62,8 +62,6 @@ jobs:
       skip_if_published: ${{ !inputs.force_build }}
 
       # ─── Variants (edit here, not in each caller) ───────────────────
-      # Needs the action at >= v1.4: earlier tags accept `variants` but
-      # have no Windows leg, so the variant schedules an empty runs-on.
       # windows-x86_64 is a mingw CROSS build — an ordinary Linux runner
       # produces the PE — and is opt-in upstream, so the full list has to
       # be spelled out rather than left to the action's default. A module
@@ -72,7 +70,6 @@ jobs:
       variants: "darwin-arm64,linux-amd64,linux-arm64,windows-x86_64"
 
       # ─── Runners and Nix cache (set by variables, not edited here) ───
-      # Needs the action at >= v1.6, since older tags reject these inputs.
       # Unset, every job runs GitHub-hosted and only reads the Logos cache.
       # See "Runners and the Nix cache" in the README.
       runner: ${{ vars.RELEASE_RUNNER }}

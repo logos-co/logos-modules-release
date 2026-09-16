@@ -3,9 +3,13 @@
 # terminal — the gh-CLI alternative to opening the repo's Actions tab
 # and clicking "Run workflow".
 #
-# Works in this repo AND in any fork: every call targets the current
-# repo via `gh`, which reads the git remote. Nothing here is hardcoded
-# to a specific owner/repo.
+# Works in this repo AND in any fork: the target is the repo the clone's
+# 'origin' remote points at — resolved here and pinned on every `gh`
+# call, never left to `gh` to work out for itself. (`gh` resolves against
+# *all* of a clone's remotes: with the usual fork layout — origin = your
+# fork, upstream = the base repo — it can land on upstream, and an
+# `unpublish` dispatched there deletes releases from someone else's
+# catalog.) Every run prints the repo it targets before it does anything.
 #
 # Usage:
 #   ./scripts/catalog.sh <command> [args] [--watch]
@@ -29,6 +33,10 @@
 #   --force  on release / release-all: Force build — replace the current
 #            published release if it has the same version (otherwise an
 #            already-published version is skipped).
+#
+# Environment:
+#   GH_REPO  Drive this repo instead of the one 'origin' points at, as
+#            [HOST/]OWNER/REPO.
 #
 # Examples:
 #   ./scripts/catalog.sh release logos-chat-module
@@ -92,6 +100,63 @@ gh auth status >/dev/null 2>&1 \
 [ -f "${WORKFLOW_DIR}/_release-module.yml" ] \
   || die "not a Logos catalog repo (no ${WORKFLOW_DIR}/_release-module.yml) — run from a clone of logos-modules-release-base or a fork"
 
+# ── target repo ───────────────────────────────────────────────────────
+# Never let `gh` choose the repo. It resolves against every remote in the
+# clone, so a fork that also has an 'upstream' remote can have its
+# dispatches — `unpublish`'s deletions included — sent to the base repo.
+# We read 'origin' ourselves and pass the result to each `gh` call as
+# --repo. GH_REPO is exported too: it doubles as the user's override, and
+# means a `gh` call added here later can't fall back to guessing.
+
+# Set REPO from a remote's URL, in the shapes git accepts:
+#   https://github.com/owner/repo[.git]        (optionally user[:pass]@)
+#   ssh://git@github.com[:22]/owner/repo[.git]
+#   git@github.com:owner/repo[.git]
+# A non-github.com host is kept as a prefix — that's gh's own
+# [HOST/]OWNER/REPO form, so Enterprise clones resolve too.
+resolve_repo_from_remote() {
+  # host/path start empty: bash 4.4+ treats a bare `local x` as unset, and
+  # `set -u` would abort on it before the unparseable-URL die() below.
+  local remote="$1" url rest owner name host="" path=""
+  url="$(git remote get-url "$remote" 2>/dev/null || true)"
+  [ -n "$url" ] \
+    || die "this clone has no '${remote}' remote, so there's no catalog to target — add one, or set GH_REPO=<owner>/<repo>"
+
+  case "$url" in
+    *://*) rest="${url#*://}"; rest="${rest#*@}"   # drop scheme, then userinfo
+           host="${rest%%/*}"; path="${rest#*/}" ;;
+    *:*)   rest="${url#*@}"                        # scp-like: [user@]host:path
+           host="${rest%%:*}"; path="${rest#*:}" ;;
+    *)     path="" ;;                              # local path or something odd
+  esac
+  host="${host%%:*}"                               # drop any :port
+  path="${path#/}"; path="${path%/}"; path="${path%.git}"; path="${path%/}"
+
+  owner=""; name=""
+  case "$path" in
+    */*/*) : ;;                                    # deeper than owner/repo
+    */*)   owner="${path%%/*}"; name="${path#*/}" ;;
+  esac
+  [ -n "$host" ] && [ -n "$owner" ] && [ -n "$name" ] \
+    || die "can't read an owner/repo out of the '${remote}' URL (${url}) — set GH_REPO=<owner>/<repo> to name the catalog to drive"
+
+  case "$host" in
+    github.com|www.github.com) REPO="${owner}/${name}" ;;
+    *)                         REPO="${host}/${owner}/${name}" ;;
+  esac
+}
+
+if [ -n "${GH_REPO:-}" ]; then
+  REPO="$GH_REPO"
+  REPO_SOURCE="\$GH_REPO"
+else
+  resolve_repo_from_remote origin
+  REPO_SOURCE="git remote 'origin'"
+fi
+export GH_REPO="$REPO"
+
+echo "==> catalog repo: ${REPO}  (from ${REPO_SOURCE})"
+
 # ── helpers ───────────────────────────────────────────────────────────
 
 # Module names with a per-module release workflow: release-<module>.yml,
@@ -110,7 +175,7 @@ list_modules() {
 
 # Newest run id for a workflow file, or empty if none yet.
 latest_run_id() {
-  gh run list --workflow "$1" --limit 1 \
+  gh run list --repo "$REPO" --workflow "$1" --limit 1 \
      --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true
 }
 
@@ -126,7 +191,7 @@ follow_new_run() {
     sleep 2
     id="$(latest_run_id "$wf")"
     if [ -n "$id" ] && [ "$id" != "$before" ]; then
-      gh run watch "$id"
+      gh run watch --repo "$REPO" "$id"
       return 0
     fi
     tries=$((tries + 1))
@@ -144,8 +209,8 @@ run_workflow() {
   local before=""
   [ "$WATCH" = "1" ] && before="$(latest_run_id "$wf")"
 
-  echo "==> triggering ${wf}"
-  gh workflow run "$wf" "$@"
+  echo "==> triggering ${wf} on ${REPO}"
+  gh workflow run --repo "$REPO" "$wf" "$@"
 
   if [ "$WATCH" = "1" ]; then
     follow_new_run "$wf" "$before"
@@ -206,11 +271,11 @@ case "$CMD" in
     [ "$DRY_RUN" = "1" ] && DRY="true"
 
     if [ "$DRY" = "true" ]; then
-      echo "==> dry run — nothing will be deleted"
+      echo "==> dry run on ${REPO} — nothing will be deleted"
     else
       target="all versions of '${MODULE}'"
       [ -n "$VERSION" ] && target="'${MODULE}' v${VERSION}"
-      echo "!!  this will DELETE ${target} from the catalog (irreversible)."
+      echo "!!  this will DELETE ${target} from ${REPO} (irreversible)."
       # Confirm only at an interactive terminal — a fat-finger guard.
       # Piped / CI use proceeds straight through, matching how the
       # workflow itself runs (no confirmation step).
@@ -233,16 +298,16 @@ case "$CMD" in
 
   status)
     echo "==> recent workflow runs"
-    gh run list --limit 15
+    gh run list --repo "$REPO" --limit 15
     ;;
 
   watch)
     RUN_ID="${ARGS[1]:-}"
     if [ -z "$RUN_ID" ]; then
-      RUN_ID="$(gh run list --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+      RUN_ID="$(gh run list --repo "$REPO" --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
       [ -n "$RUN_ID" ] || die "no runs found to watch"
     fi
-    gh run watch "$RUN_ID"
+    gh run watch --repo "$REPO" "$RUN_ID"
     ;;
 
   *)
