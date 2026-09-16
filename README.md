@@ -33,3 +33,27 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-storage-ui` | logos-co |
 | `logos-wallet-module` | logos-co |
 | `logos-wallet-ui` | logos-co |
+
+## Runners and the Nix cache
+
+Releases read the Logos Nix cache (`cache.nix.logos.co`) and push what they
+build to it. This works because the repo is provisioned for the cache: it
+has the `ATTIC_ENDPOINT` variable, the `ATTIC_TOKEN_CI` secret, and a
+`public-cache` environment (branch `main`) holding `ATTIC_TOKEN_PUBLIC`.
+Runs from `main` push to the public cache.
+
+Every job runs on GitHub-hosted runners unless these repository variables
+say otherwise:
+
+- `RELEASE_BUILD_RUNNERS` moves the build legs, per variant.
+- `RELEASE_RUNNER` moves every other job.
+
+To put the builds on the enterprise self-hosted runners:
+
+```bash
+gh variable set RELEASE_BUILD_RUNNERS --repo logos-co/logos-modules-release --body '{"linux-amd64": ["self-hosted", "Linux", "X64"], "windows-x86_64": ["self-hosted", "Linux", "X64"], "darwin-arm64": ["self-hosted", "macOS", "ARM64"]}'
+```
+
+`linux-arm64` has no self-hosted runner and stays on `ubuntu-24.04-arm`.
+The value format is described in the
+[base repo's README](https://github.com/logos-co/logos-modules-release-base#runners-and-the-nix-cache).
