@@ -45,3 +45,4 @@ jobs:
       version:     ${{ inputs.version }}
       delete_tags: ${{ inputs.delete_tags }}
       dry_run:     ${{ inputs.dry_run }}
+      runner:      ${{ vars.RELEASE_RUNNER }}

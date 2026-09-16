@@ -19,7 +19,7 @@ name: _release-module
 #              1. Generate an Ed25519 JWK private key.
 #              2. Add it as the `LOGOS_SIGNING_KEY` Actions secret.
 #              3. Uncomment the `signing_mode: inline` line + the
-#                 `secrets:` block below; delete `signing_mode: none`.
+#                 `signing_key:` line below; delete `signing_mode: none`.
 #              4. Put the matching public DID in `logos-repo.json`
 #                 under `trustedSigners`.
 #
@@ -53,7 +53,7 @@ permissions:
 
 jobs:
   release:
-    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.4
+    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.6
     with:
       module_path: ${{ inputs.module_path }}
 
@@ -71,11 +71,21 @@ jobs:
       # that leg; the other three still publish as a partial release.
       variants: "darwin-arm64,linux-amd64,linux-arm64,windows-x86_64"
 
+      # ─── Runners and Nix cache (set by variables, not edited here) ───
+      # Needs the action at >= v1.6, since older tags reject these inputs.
+      # Unset, every job runs GitHub-hosted and only reads the Logos cache.
+      # See "Runners and the Nix cache" in the README.
+      runner: ${{ vars.RELEASE_RUNNER }}
+      build_runners: ${{ vars.RELEASE_BUILD_RUNNERS }}
+      # ATTIC_ENDPOINT marks a repo provisioned for the Logos cache, which
+      # also gets ATTIC_TOKEN_CI and a public-cache environment.
+      cache_environment: ${{ vars.ATTIC_ENDPOINT && 'public-cache' || '' }}
+
       # ─── Signing mode (edit here, not in each caller) ────────────────
       signing_mode: none
 
-      # Inline signing — uncomment these two lines (and the `secrets:`
-      # block at the bottom), then delete `signing_mode: none` above.
+      # Inline signing — uncomment this line (and `signing_key:` at the
+      # bottom), then delete `signing_mode: none` above.
       #signing_mode: inline
 
       # External signing (Jenkins / HSM / hardware token). Uncomment and
@@ -90,8 +100,15 @@ jobs:
       #        -o "$LGX_SIGNED_OUT" \
       #        "$JENKINS_SIGNING_URL"
 
-    # Inline mode reads this; none/external ignore it. Wired via
-    # `secrets: inherit` from each caller so the per-module files don't
-    # need to know which secret names matter. Uncomment for inline mode.
-    #secrets:
-    #  signing_key: ${{ secrets.LOGOS_SIGNING_KEY }}
+    # Reaches here via `secrets: inherit` from each caller, so the
+    # per-module files don't need to know which secret names matter.
+    secrets:
+      # Both are empty outside Logos-provisioned repos, leaving the cache
+      # read-only. ATTIC_TOKEN_PUBLIC is empty here even inside them: it lives
+      # in the public-cache environment, and a called job can only read an
+      # environment secret whose name its caller passed.
+      ATTIC_TOKEN_CI: ${{ secrets.ATTIC_TOKEN_CI }}
+      ATTIC_TOKEN_PUBLIC: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
+      # Inline mode reads this; none/external ignore it. Uncomment for
+      # inline mode.
+      #signing_key: ${{ secrets.LOGOS_SIGNING_KEY }}
