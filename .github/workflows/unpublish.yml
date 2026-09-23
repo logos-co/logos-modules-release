@@ -39,10 +39,12 @@ permissions:
 
 jobs:
   unpublish:
-    uses: logos-co/logos-modules-release-action/.github/workflows/unpublish.yml@v1
+    uses: logos-co/logos-modules-release-action/.github/workflows/unpublish.yml@v1.7
     with:
       module:      ${{ inputs.module }}
       version:     ${{ inputs.version }}
       delete_tags: ${{ inputs.delete_tags }}
       dry_run:     ${{ inputs.dry_run }}
       runner:      ${{ vars.RELEASE_RUNNER }}
+    secrets:
+      storage_nodes: ${{ secrets.STORAGE_NODES }}
