@@ -53,7 +53,7 @@ permissions:
 
 jobs:
   release:
-    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.6
+    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.7
     with:
       module_path: ${{ inputs.module_path }}
 
@@ -106,6 +106,7 @@ jobs:
       # environment secret whose name its caller passed.
       ATTIC_TOKEN_CI: ${{ secrets.ATTIC_TOKEN_CI }}
       ATTIC_TOKEN_PUBLIC: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
+      storage_nodes: ${{ secrets.STORAGE_NODES }}
       # Inline mode reads this; none/external ignore it. Uncomment for
       # inline mode.
       #signing_key: ${{ secrets.LOGOS_SIGNING_KEY }}
