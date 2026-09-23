@@ -80,16 +80,12 @@ pipeline {
             usernameVariable: 'GITHUB_USER',
             passwordVariable: 'GH_TOKEN',
           )]) {
-            toBuild = requested.findAll { m ->
-              def rc = nix.develop(
-                keepEnv: ['GH_TOKEN', 'GH_REPO'],
-                returnStatus: true,
-                "scripts/check-published.sh ${m}"
-              )
-              if (rc == 2) { error("Publish check errored for ${m} - aborting rather than rebuilding everything") }
-              if (rc == 0) { echo "SKIP ${m} - already published" }
-              return rc != 0
-            }
+            def output = nix.develop(
+              keepEnv: ['GH_TOKEN', 'GH_REPO'],
+              returnStdout: true,
+              "scripts/check-published.sh ${requested.join(' ')}"
+            )
+            toBuild = output.trim() ? output.trim().split('\n') as List : []
           }
         }
 
