@@ -10,6 +10,12 @@ name: Unpublish module / version
 # hard-guarded against deletion by the action.
 #
 # Thin wrapper — the actual logic lives in the versioned action.
+#
+# NOTE: since we are using Jenkins, unpublishing alone is not permanent. The Jenkins
+# release pipeline re-publishes any version that metadata.json still
+# declares, on the next merge to master it will rebuild, re-sign and
+# re-release what you just removed. Pair every unpublish with a PR that
+# bumps (or removes) the module's metadata.json version.
 
 on:
   workflow_dispatch:
