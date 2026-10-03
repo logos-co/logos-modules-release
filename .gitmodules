@@ -156,3 +156,6 @@
 	url = https://github.com/logos-co/logos-rln-modules
 	module = logos-lez-rln-module
 	module = logos-rln-module
+[submodule "submodules/logos-forum"]
+	path = submodules/logos-forum
+	url = https://github.com/edenbd1/lp-0026-forum
