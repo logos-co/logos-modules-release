@@ -1,6 +1,6 @@
 #!/usr/bin/env groovy
 
-library 'status-jenkins-lib@v1.9.51'
+library 'status-jenkins-lib@v1.10.1'
 
 pipeline {
   agent { label "macos && ${getArch()} && nix-2.33" }
