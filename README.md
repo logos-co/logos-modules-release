@@ -88,26 +88,71 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-json-rpc-bridge` | logos-co |
 | `openmetrics-module` | logos-co |
 
-## Runners and the Nix cache
+## Releasing a module
 
-Releases read the Logos Nix cache (`cache.nix.logos.co`) and push what they
-build to it. This works because the repo is provisioned for the cache: it
-has the `ATTIC_ENDPOINT` variable, the `ATTIC_TOKEN_CI` secret, and a
-`public-cache` environment (branch `main`) holding `ATTIC_TOKEN_PUBLIC`.
-Runs from `main` push to the public cache.
+Open a PR to `master` that bumps your submodule commit **and** the version
+in your module's `metadata.json`, then merge it. That's the whole procedure,
+ there is no button to press and no tag to push.
 
-Every job runs on GitHub-hosted runners unless these repository variables
-say otherwise:
+On every merge to `master` the Jenkins release pipeline:
 
-- `RELEASE_BUILD_RUNNERS` moves the build legs, per variant.
-- `RELEASE_RUNNER` moves every other job.
+1. Compares each module's `metadata.json` version against the published
+   GitHub releases and picks up whatever isn't released yet. It does not
+   diff which submodules changed, so **the `metadata.json` version bump is
+   the release trigger**. Bumping the submodule commit alone releases
+   nothing (which also means you can merge submodule updates without
+   releasing, by holding the version bump).
+2. Builds the module on `linux-amd64`, `linux-arm64` and `darwin-arm64`
+   (`nix build .#lgx-portable` per platform).
+3. Merges the per-platform packages into a single `.lgx` and signs it with
+   the official Logos release key.
+4. Publishes the `<name>-v<version>` GitHub release with two assets: the
+   signed `.lgx` and a `sidecar.json` describing it.
 
-To put the builds on the enterprise self-hosted runners:
+The catalog index then updates itself: the `rebuild-index.yml` workflow
+rebuilds `index.json` from all published releases whenever a release is
+published, and on a 6-hourly schedule as a catch-up. Within a few minutes
+of the merge the new version is visible in Basecamp.
 
-```bash
-gh variable set RELEASE_BUILD_RUNNERS --repo logos-co/logos-modules-release --body '{"linux-amd64": ["self-hosted", "Linux", "X64"], "windows-x86_64": ["self-hosted", "Linux", "X64"], "darwin-arm64": ["self-hosted", "macOS", "ARM64"]}'
+Published versions are **immutable**: the pipeline skips anything already
+fully released, so changing a module's content without bumping its version
+ships nothing.
+
+## Unpublishing a module or version
+
+Removal stays on GitHub Actions: run the **Unpublish module / version**
+workflow from the Actions tab. It deletes the matching release(s) and
+optionally their git tags, then rebuilds the index so clients stop being
+offered the removed package(s). Always run it once with `dry_run: true`
+first to see exactly what matches. The rolling `index` release itself is
+guarded against deletion.
+
+**Unpublishing alone is not permanent.** The Jenkins pipeline re-publishes
+any version that `metadata.json` still declares so on the next merge to
+`master` it will rebuild, re-sign and re-release what you just removed.
+Pair every unpublish with a PR that bumps (or removes) the module's
+`metadata.json` version.
+
+## Official Logos signing key
+
+Modules published by Logos from this repository are signed with the
+following Ed25519 key. A valid signature from this key means the
+package was built and published by the Logos release pipeline.
+
+**Publisher DID:** `did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IlpUdEIzaU9FYVZDWFVLUWw0Sm9sR3V1MkhMb19iOUhSQ2V2RjRINm81aUkifQ`
+
+**Public key :** `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGU7Qd4jhGlQl1CkJeCaJRrrthy6P2/R0QnrxeB+qOYi logos-release`
+
+### Verifying a package
+
+```sh
+lgx verify <package>.lgx
 ```
 
-`linux-arm64` has no self-hosted runner and stays on `ubuntu-24.04-arm`.
-The value format is described in the
-[base repo's README](https://github.com/logos-co/logos-modules-release-base#runners-and-the-nix-cache).
+`lgx verify` prints the signer DID; confirm it matches the DID above.
+Packages from this catalog signed by any other DID, or unsigned, were
+not published by Logos.
+
+The private key is held offline and in the Logos release
+infrastructure only. If this key is ever rotated, this section and
+all current package versions will be updated in the same change.
