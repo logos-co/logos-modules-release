@@ -2,7 +2,7 @@
 set -euo pipefail
 
 USAGE="\
-release-module.sh - merge / verify / sign / package ONE module.
+release-module.sh - merge / verify / sign / upload / package ONE module.
 Publishing is NOT done here - the Jenkinsfile publishes the output
 directory via the status-jenkins-lib github functions.
 
@@ -21,10 +21,18 @@ Environment:
   LGX_SIGNER_URL      (optional)  self-asserted signer URL, default: https://logos.co
   REQUESTED_VARIANTS  (optional)  comma-separated variants the pipeline builds,
                                   default: darwin-arm64,linux-amd64,linux-arm64
+  STORAGE_NODE_URLS   (optional)  comma-separated Logos Storage node base URLs;
+                                  the API path is appended here. Unset = skip
+                                  the storage upload entirely.
+  STORAGE_NETWORKS     (required with STORAGE_NODE_URLS)  network name recorded
+                                  in the sidecar (e.g. logos.test)
+  STORAGE_USER        (required with STORAGE_NODE_URLS)  basic-auth user
+  STORAGE_PASS        (required with STORAGE_NODE_URLS)  basic-auth password
 
 Produces <out-base-dir>/<module>/:
-  - <name>-<version>.lgx    (merged, signed)
-  - sidecar.json            (must keep this literal name on the release)
+  - <name>-<version>.lgx    (merged, signed, uploaded to storage)
+  - sidecar.json            (must keep this literal name on the release;
+                             carries cid + networks when storage upload ran)
   - TAG                     (release tag:    <name>-v<version>)
   - TITLE                   (release title:  <name> v<version>)
   - NOTES                   (release description: built vs requested variants)"
@@ -94,13 +102,75 @@ cross_check_manifest() {
   fi
 }
 
+# Uploads the signed package to Logos Storage.
+# STORAGE_NODES_TEST / STORAGE_NODES_DEV: comma-separated node base URLs
+# per network; whichever is set gets uploaded to, both unset skips.
+# Credentials come from STORAGE_USER_TEST/STORAGE_PASS_TEST and
+# STORAGE_USER_DEV/STORAGE_PASS_DEV respectively.
+# Storage is content-addressed, so every node on every network must
+# answer the same CID; a mismatch is a hard error.
+upload_storage() {
+  cid=""
+  networks_json='[]'
+  if [[ -z "${STORAGE_NODES_TEST:-}" && -z "${STORAGE_NODES_DEV:-}" ]]; then
+    log 'STORAGE_NODES_TEST/STORAGE_NODES_DEV unset - skipping Logos Storage upload'
+    return 0
+  fi
+  local networks=()
+  if [[ -n "${STORAGE_NODES_TEST:-}" ]]; then
+    upload_network 'logos.test' "$STORAGE_NODES_TEST" \
+      "${STORAGE_USER_TEST:-}" "${STORAGE_PASS_TEST:-}"
+    networks+=('logos.test')
+  fi
+  if [[ -n "${STORAGE_NODES_DEV:-}" ]]; then
+    upload_network 'logos.dev' "$STORAGE_NODES_DEV" \
+      "${STORAGE_USER_DEV:-}" "${STORAGE_PASS_DEV:-}"
+    networks+=('logos.dev')
+  fi
+  networks_json=$(printf '%s\n' "${networks[@]}" | jq -Rc . | jq -sc .)
+  log "uploaded to Logos Storage: cid=${cid} networks=$(IFS=,; echo "${networks[*]}")"
+}
+
+# Uploads $out to every node of one network; sets/checks the global $cid.
+upload_network() {
+  local net="$1" urls="$2" user="$3" pass="$4"
+  local fname endpoint got ok=0
+  fname=$(basename "$out")
+  [[ -n "$user" && -n "$pass" ]] || die "missing credentials for network ${net}"
+  for endpoint in ${urls//,/ }; do
+    if ! got=$(curl -sS --fail-with-body -X POST \
+                 -H 'Content-Type: application/octet-stream' \
+                 -H "Content-Disposition: attachment; filename=\"${fname}\"" \
+                 --data-binary @"$out" \
+                 --config - \
+                 "${endpoint%/}/api/storage/v1/data" 2>&1 \
+                 <<<"user = \"${user}:${pass}\""); then
+      warn "storage node refused the upload (${net}: ${endpoint}): ${got}"
+      continue
+    fi
+    got="${got//[$'\r\n\t ']/}"
+    [[ "$got" =~ ^[A-Za-z0-9]{32,}$ ]] || die "storage node ${endpoint} returned a malformed CID: '${got}'"
+    if [[ -z "$cid" ]]; then
+      cid="$got"
+    elif [[ "$got" != "$cid" ]]; then
+      die "storage CID mismatch: ${endpoint} answered ${got} but another node answered ${cid}"
+    fi
+    ok=$((ok + 1))
+  done
+  [[ "$ok" -gt 0 ]] || die "failed to upload ${fname} to every ${net} node"
+}
+
 write_sidecar() {
-  local sha size sig mroot built_json
+  local sha size sig mroot requested built_json missing_json
   sha=$(sha256sum "$out" | awk '{print $1}')
   size=$(stat -c%s "$out" 2>/dev/null || stat -f%z "$out")  # GNU || BSD stat
   sig=$(lgx signature "$out" 2>/dev/null || true)
   mroot=$(jq -r '.hashes.root // ""' <<<"$manifest")
+  requested="${REQUESTED_VARIANTS:-darwin-arm64,linux-amd64,linux-arm64}"
   built_json=$(printf '%s' "$built_csv" | jq -R 'split(",") | map(select(length>0))')
+  missing_json=$(jq -cn \
+    --argjson r "$(printf '%s' "$requested" | jq -R 'split(",")')" \
+    --argjson b "$built_json" '$r - $b')
 
   jq -n \
     --arg releaseTag "$tag" \
@@ -109,17 +179,24 @@ write_sidecar() {
     --arg rootHash "$mroot" \
     --argjson manifest "$manifest" \
     --arg signature "$sig" \
+    --arg cid "${cid:-}" \
+    --argjson networks "${networks_json:-[]}" \
     --argjson builtVariants "$built_json" \
+    --argjson missingVariants "$missing_json" \
     '{
-       publisherRef:  $releaseTag,
-       releasedAt:    $releasedAt,
-       sha256:        $sha,
-       size:          $size,
-       rootHash:      $rootHash,
-       builtVariants: $builtVariants,
-       manifest:      $manifest
+       publisherRef:    $releaseTag,
+       releasedAt:      $releasedAt,
+       sha256:          $sha,
+       size:            $size,
+       rootHash:        $rootHash,
+       builtVariants:   $builtVariants,
+       missingVariants: $missingVariants,
+       manifest:        $manifest
      } + (if ($signature | length) > 0
           then { signature: ($signature | fromjson) }
+          else {} end)
+       + (if ($cid | length) > 0
+          then { cid: $cid, networks: $networks }
           else {} end)' > "${outdir}/sidecar.json"
 }
 
@@ -160,6 +237,7 @@ main() {
   lgx verify "$out"        # pre-sign structural check
   sign_package             # signs + re-verifies, or warns if keyless
   cross_check_manifest
+  upload_storage           # before the sidecar - the CID goes into it
   write_sidecar
   write_release_meta
 

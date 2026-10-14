@@ -49,6 +49,16 @@ pipeline {
       defaultValue: utils.isReleaseBuild() || (params.PUBLISH ?: false)
     )
     string(
+      name: 'STORAGE_NODES_TEST',
+      description: 'Comma-separated logos.test storage node base URLs. Empty skips that network.',
+      defaultValue: params.STORAGE_NODES_TEST ?: 'https://node-02.gc-us-central1-a.logos.test.status.im',
+    )
+    string(
+      name: 'STORAGE_NODES_DEV',
+      description: 'Comma-separated logos.dev storage node base URLs. Empty skips that network.',
+      defaultValue: params.STORAGE_NODES_DEV ?: 'https://storage-02.gc-us-central1-a.logos.dev.status.im',
+    )
+    string(
       name: 'BRANCH',
       description: 'Git branch to build.',
       defaultValue: 'main'
@@ -133,24 +143,44 @@ pipeline {
     stage('Merge & Sign') {
       when { expression { hasModules() } }
       steps { script {
-        def wrap = { Closure body ->
-          params.SIGN
-            ? withCredentials([file(credentialsId: 'logos-lgx-release-signing-key', variable: 'LGX_SIGNING_KEY')]) { body() }
-            : body()
+        def creds = []
+        if (params.SIGN) {
+          creds << file(credentialsId: 'logos-lgx-release-signing-key', variable: 'LGX_SIGNING_KEY')
         }
-        wrap {
-          def failed = []
-          def modules = env.BUILD_MODULES.split(',') as List
-          modules.each { m ->
-            def status = nix.develop(
-              keepEnv: ['LGX_SIGNING_KEY'],
-              returnStatus: true,
-              "scripts/release-module.sh ${m} pkg released"
-            )
-            if (status != 0) { failed << m }
+        if (params.STORAGE_NODES_TEST?.trim()) {
+          creds << usernamePassword(
+            credentialsId:    'logos-storage-node-auth-test',
+            usernameVariable: 'STORAGE_USER_TEST',
+            passwordVariable: 'STORAGE_PASS_TEST',
+          )
+        }
+        if (params.STORAGE_NODES_DEV?.trim()) {
+          creds << usernamePassword(
+            credentialsId:    'logos-storage-node-auth-dev',
+            usernameVariable: 'STORAGE_USER_DEV',
+            passwordVariable: 'STORAGE_PASS_DEV',
+          )
+        }
+        withCredentials(creds) {
+          withEnv([
+            "STORAGE_NODES_TEST=${params.STORAGE_NODES_TEST?.trim() ?: ''}",
+            "STORAGE_NODES_DEV=${params.STORAGE_NODES_DEV?.trim() ?: ''}",
+          ]) {
+            def failed = []
+            def modules = env.BUILD_MODULES.split(',') as List
+            modules.each { m ->
+              def status = nix.develop(
+                keepEnv: ['LGX_SIGNING_KEY',
+                          'STORAGE_NODES_TEST', 'STORAGE_USER_TEST', 'STORAGE_PASS_TEST',
+                          'STORAGE_NODES_DEV',  'STORAGE_USER_DEV',  'STORAGE_PASS_DEV'],
+                returnStatus: true,
+                "scripts/release-module.sh ${m} pkg released"
+              )
+              if (status != 0) { failed << m }
+            }
+            if (failed) { unstable("Packaging failed for: ${failed.join(', ')}") }
+            if (failed.size() == modules.size()) { error('Every module failed packaging') }
           }
-          if (failed) { unstable("Packaging failed for: ${failed.join(', ')}") }
-          if (failed.size() == modules.size()) { error('Every module failed packaging') }
         }
       } }
     }
@@ -161,8 +191,8 @@ pipeline {
         findFiles(glob: 'released/*/TAG').each { tagFile ->
           def moddir = tagFile.path.replaceAll('/TAG$', '')
           def tag    = readFile(tagFile.path).trim()
-          def files  = findFiles(glob: "${moddir}/*.lgx") +
-                       findFiles(glob: "${moddir}/sidecar.json")
+          def files  = (findFiles(glob: "${moddir}/*.lgx") +
+                        findFiles(glob: "${moddir}/sidecar.json"))*.path
           github.upsertRelease(
             user:    env.GH_USER,
             repo:    env.GH_NAME,
@@ -176,7 +206,6 @@ pipeline {
         }
       } }
     }
-  }
 
   post {
     always { script {
