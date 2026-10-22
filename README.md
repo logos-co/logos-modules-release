@@ -85,7 +85,6 @@ by fetching `logos-repo.json` from the default branch root.
 | Module | Source |
 |---|---|
 | `logos-accounts-ui` | logos-co |
-| `logos-json-rpc-bridge` | logos-co |
 | `openmetrics-module` | logos-co |
 
 ## Releasing a module
