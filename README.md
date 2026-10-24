@@ -24,6 +24,9 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-blockchain-ui` | logos-blockchain |
 | `logos-execution-zone-module` | logos-blockchain |
 | `logos-execution-zone-wallet-ui` | logos-blockchain |
+| `logos-token-module` | logos-blockchain |
+| `logos-token-ui-module` | logos-blockchain |
+| `logos-twap-oracle-module` | logos-blockchain |
 
 ### Logos Messaging
 
