@@ -74,14 +74,20 @@ pipeline {
   stages {
     stage('Setup') {
       steps { script {
-        def all = sh(
+        def dirs = sh(
           script: "find submodules -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort",
           returnStdout: true
         ).trim().split('\n') as List
+        def all = dirs.findAll { fileExists("submodules/${it}/metadata.json") }
+        def ignored = dirs - all
+        if (ignored) {
+          echo "WARNING: no metadata.json, ignoring: ${ignored.join(', ')}"
+        }
+
         def requested = params.MODULES?.trim() ?
           params.MODULES.split(',').collect { it.trim() }.findAll { it } : all
         def unknown = requested - all
-        if (unknown) { error("Unknown modules: ${unknown.join(', ')}") }
+        if (unknown) { error("Unknown modules (or missing metadata.json): ${unknown.join(', ')}") }
 
         def toBuild = requested
         if (params.SKIP_IF_PUBLISHED) {
@@ -191,8 +197,8 @@ pipeline {
         findFiles(glob: 'released/*/TAG').each { tagFile ->
           def moddir = tagFile.path.replaceAll('/TAG$', '')
           def tag    = readFile(tagFile.path).trim()
-          def files  = (findFiles(glob: "${moddir}/*.lgx") +
-                        findFiles(glob: "${moddir}/sidecar.json"))*.path
+          def files  = (findFiles(glob: "${moddir}/*.lgx") as List) +
+                       (findFiles(glob: "${moddir}/sidecar.json") as List)
           github.upsertRelease(
             user:    env.GH_USER,
             repo:    env.GH_NAME,
