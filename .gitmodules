@@ -153,3 +153,12 @@
 	url = https://github.com/logos-co/logos-rln-modules
 	module = logos-lez-rln-module
 	module = logos-rln-module
+[submodule "submodules/logos-token-module"]
+	path = submodules/logos-token-module
+	url = https://github.com/logos-blockchain/logos-token-module
+[submodule "submodules/logos-token-ui-module"]
+	path = submodules/logos-token-ui-module
+	url = https://github.com/logos-blockchain/logos-token-ui-module
+[submodule "submodules/logos-twap-oracle-module"]
+	path = submodules/logos-twap-oracle-module
+	url = https://github.com/logos-blockchain/logos-twap-oracle-module
