@@ -92,11 +92,11 @@ by fetching `logos-repo.json` from the default branch root.
 
 ## Releasing a module
 
-Open a PR to `master` that bumps your submodule commit **and** the version
+Open a PR to `main` that bumps your submodule commit **and** the version
 in your module's `metadata.json`, then merge it. That's the whole procedure,
  there is no button to press and no tag to push.
 
-On every merge to `master` the Jenkins release pipeline:
+On every merge to `main` the Jenkins release pipeline:
 
 1. Compares each module's `metadata.json` version against the published
    GitHub releases and picks up whatever isn't released yet. It does not
@@ -131,7 +131,7 @@ guarded against deletion.
 
 **Unpublishing alone is not permanent.** The Jenkins pipeline re-publishes
 any version that `metadata.json` still declares so on the next merge to
-`master` it will rebuild, re-sign and re-release what you just removed.
+`main` it will rebuild, re-sign and re-release what you just removed.
 Pair every unpublish with a PR that bumps (or removes) the module's
 `metadata.json` version.
 

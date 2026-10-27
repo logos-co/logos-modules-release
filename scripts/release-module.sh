@@ -19,8 +19,10 @@ Environment:
                                   (any filename); unsigned if unset
   LGX_SIGNER_NAME     (optional)  self-asserted signer name, default: Logos
   LGX_SIGNER_URL      (optional)  self-asserted signer URL, default: https://logos.co
-  REQUESTED_VARIANTS  (optional)  comma-separated variants the pipeline builds,
-                                  default: darwin-arm64,linux-amd64,linux-arm64
+  REQUESTED_VARIANTS  (optional)  comma-separated variants the catalog builds;
+                                  any not built for this module are listed as
+                                  missing, default:
+                                  darwin-arm64,linux-amd64,linux-arm64,windows-amd64
   STORAGE_NODE_URLS   (optional)  comma-separated Logos Storage node base URLs;
                                   the API path is appended here. Unset = skip
                                   the storage upload entirely.
@@ -166,7 +168,7 @@ write_sidecar() {
   size=$(stat -c%s "$out" 2>/dev/null || stat -f%z "$out")  # GNU || BSD stat
   sig=$(lgx signature "$out" 2>/dev/null || true)
   mroot=$(jq -r '.hashes.root // ""' <<<"$manifest")
-  requested="${REQUESTED_VARIANTS:-darwin-arm64,linux-amd64,linux-arm64}"
+  requested="${REQUESTED_VARIANTS:-darwin-arm64,linux-amd64,linux-arm64,windows-amd64}"
   built_json=$(printf '%s' "$built_csv" | jq -R 'split(",") | map(select(length>0))')
   missing_json=$(jq -cn \
     --argjson r "$(printf '%s' "$requested" | jq -R 'split(",")')" \
@@ -201,7 +203,7 @@ write_sidecar() {
 }
 
 write_release_meta() {
-  local requested="${REQUESTED_VARIANTS:-darwin-arm64,linux-amd64,linux-arm64}"
+  local requested="${REQUESTED_VARIANTS:-darwin-arm64,linux-amd64,linux-arm64,windows-amd64}"
   local missing_csv missing_display
   missing_csv=$(comm -23 \
     <(tr ',' '\n' <<<"$requested" | sort -u) \
@@ -214,9 +216,6 @@ write_release_meta() {
   {
     printf 'Built variants: %s\n'   "${built_csv//,/, }"
     printf 'Missing variants: %s\n' "${missing_display//,/, }"
-    if [[ -n "$missing_csv" ]]; then
-      printf '\n_Partial release - some requested variants did not build._\n'
-    fi
   } > "${outdir}/NOTES"
 }
 

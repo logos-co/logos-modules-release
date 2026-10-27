@@ -25,6 +25,7 @@
             findutils
             git
             jq
+            nix
             python3
             gnutar
             gzip

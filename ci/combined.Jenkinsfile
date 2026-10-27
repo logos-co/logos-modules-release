@@ -1,8 +1,29 @@
 #!/usr/bin/env groovy
 
-library 'status-jenkins-lib@v1.10.1'
+library 'status-jenkins-lib@v1.10.3'
 
 urls = [:]
+
+/* Every platform the catalog can build. `system` is the flake system
+ * (packages.<system>.lgx-portable), `variant` the pkg/<module>__<variant>.lgx
+ * suffix the platform job writes. */
+PLATFORMS = [
+  [name: 'Linux/x86_64',   key: 'Linux',     system: 'x86_64-linux',   variant: 'linux-amd64',
+   job: 'logos/logos-modules-release/systems/linux/x86_64/package'],
+  [name: 'Linux/aarch64',  key: 'Linux-ARM', system: 'aarch64-linux',  variant: 'linux-arm64',
+   job: 'logos/logos-modules-release/systems/linux/aarch64/package'],
+  [name: 'macOS/aarch64',  key: 'macOS',     system: 'aarch64-darwin', variant: 'darwin-arm64',
+   job: 'logos/logos-modules-release/systems/macos/aarch64/package'],
+  [name: 'Windows/x86_64', key: 'Windows',   system: 'x86_64-windows', variant: 'windows-amd64',
+   job: 'logos/logos-modules-release/systems/windows/x86_64/package'],
+]
+
+/* module -> list of flake systems it targets; filled in Setup. */
+targets = [:]
+
+/* module -> reason, for modules that needed a release but didn't get one.
+ * They stay unpublished, so the next run retries them. */
+notReleased = [:]
 
 pipeline {
   agent {
@@ -108,42 +129,54 @@ pipeline {
         if (toBuild.isEmpty()) {
           currentBuild.description = 'All requested modules already published'
         }
-        env.BUILD_MODULES = toBuild.join(',')
+
+        targets.putAll(getModuleTargets(toBuild))
+        env.BUILD_MODULES = targets.keySet().join(',')
         echo "Building: ${env.BUILD_MODULES ?: '<none>'}"
+        PLATFORMS.each { p ->
+          echo "  ${p.name}: ${modulesFor(p).join(', ') ?: '<none>'}"
+        }
       } }
     }
 
     stage('Build') {
       when { expression { hasModules() } }
-      parallel {
-        stage('Linux/x86_64') { steps { script {
-          getArtifacts('Linux', build(
-            job: 'logos/logos-modules-release/systems/linux/x86_64/package',
-            parameters: [
-              string(name: 'MODULES', value: env.BUILD_MODULES),
-              string(name: 'BRANCH',  value: params.BRANCH),
-            ],
-          ))
-        } } }
-        stage('Linux/aarch64') { steps { script {
-          getArtifacts('Linux-ARM', build(
-            job: 'logos/logos-modules-release/systems/linux/aarch64/package',
-            parameters: [
-              string(name: 'MODULES', value: env.BUILD_MODULES),
-              string(name: 'BRANCH',  value: params.BRANCH),
-            ],
-          ))
-        } } }
-        stage('macOS/aarch64') { steps { script {
-          getArtifacts('macOS', build(
-            job: 'logos/logos-modules-release/systems/macos/aarch64/package',
-            parameters: [
-              string(name: 'MODULES', value: env.BUILD_MODULES),
-              string(name: 'BRANCH',  value: params.BRANCH),
-            ],
-          ))
-        } } }
-      }
+      steps { script {
+        def branches = [:]
+        PLATFORMS.each { p ->
+          def mods = modulesFor(p)
+          if (!mods) { return }
+          branches[p.name] = {
+            stage(p.name) {
+              def child = build(
+                job: p.job,
+                propagate: false,
+                parameters: [
+                  string(name: 'MODULES', value: mods.join(',')),
+                  string(name: 'BRANCH',  value: params.BRANCH),
+                ],
+              )
+              def result = child.result
+              github.statusUpdate(
+                context: "jenkins/${p.name}",
+                state:   result == 'SUCCESS' ? 'SUCCESS' : 'FAILURE',
+                message: "${result}: ${mods.size()} module(s)",
+                url:     child.absoluteUrl,
+              )
+              urls[p.key] = child.absoluteUrl
+              jenkins.setBuildDesc(urls)
+              /* Copy whatever did build; modules missing a variant are
+               * caught per module in Merge & Sign. */
+              try {
+                jenkins.copyArts(child)
+              } catch (ex) {
+                echo "WARNING: no artifacts from ${p.name} (${result}): ${ex.message}"
+              }
+            }
+          }
+        }
+        parallel(branches)
+      } }
     }
 
     stage('Merge & Sign') {
@@ -171,21 +204,32 @@ pipeline {
           withEnv([
             "STORAGE_NODES_TEST=${params.STORAGE_NODES_TEST?.trim() ?: ''}",
             "STORAGE_NODES_DEV=${params.STORAGE_NODES_DEV?.trim() ?: ''}",
+            /* Variants a module doesn't build are listed as missing. */
+            "REQUESTED_VARIANTS=${PLATFORMS.collect { it.variant }.join(',')}",
           ]) {
-            def failed = []
-            def modules = env.BUILD_MODULES.split(',') as List
-            modules.each { m ->
+            (env.BUILD_MODULES.split(',') as List).each { m ->
+              /* All or nothing: never publish a module without a variant
+               * it targets - published versions are immutable. */
+              def missing = PLATFORMS
+                .findAll { it.system in targets[m] }
+                .collect { it.variant }
+                .findAll { v -> !fileExists("pkg/${m}__${v}.lgx") }
+              if (missing) {
+                notReleased[m] = "build failed: ${missing.join(', ')}"
+                return
+              }
               def status = nix.develop(
-                keepEnv: ['LGX_SIGNING_KEY',
+                keepEnv: ['LGX_SIGNING_KEY', 'REQUESTED_VARIANTS',
                           'STORAGE_NODES_TEST', 'STORAGE_USER_TEST', 'STORAGE_PASS_TEST',
                           'STORAGE_NODES_DEV',  'STORAGE_USER_DEV',  'STORAGE_PASS_DEV'],
                 returnStatus: true,
                 "scripts/release-module.sh ${m} pkg released"
               )
-              if (status != 0) { failed << m }
+              if (status != 0) {
+                notReleased[m] = 'packaging failed'
+                sh "rm -rf 'released/${m}'"
+              }
             }
-            if (failed) { unstable("Packaging failed for: ${failed.join(', ')}") }
-            if (failed.size() == modules.size()) { error('Every module failed packaging') }
           }
         }
       } }
@@ -212,9 +256,19 @@ pipeline {
         }
       } }
     }
+
+    stage('Summary') {
+      when { expression { notReleased } }
+      steps { script {
+        notReleased.each { m, reason -> echo "NOT RELEASED  ${m}: ${reason}" }
+        error("Not released: ${notReleased.keySet().join(', ')} (retried on the next run)")
+      } }
+    }
   }
 
   post {
+    success      { script { github.statusUpdate(context: "jenkins/${params.BRANCH}", state: 'SUCCESS', message: 'Release pipeline passed') } }
+    unsuccessful { script { github.statusUpdate(context: "jenkins/${params.BRANCH}", state: 'FAILURE', message: "Release pipeline ${currentBuild.currentResult}") } }
     always { script {
       archiveArtifacts(artifacts: 'released/**, pkg/report__*', allowEmptyArchive: true)
       if (urls) { jenkins.setBuildDesc(urls) }
@@ -226,11 +280,41 @@ pipeline {
   }
 }
 
-def getArtifacts(key, childBuild) {
-  jenkins.copyArts(childBuild)
-  urls[key] = childBuild.absoluteUrl
-  jenkins.setBuildDesc(urls)
-  return childBuild
+/* Returns [module: [system, ...]] for every module that targets at least one
+ * of PLATFORMS, judged by packages.<system>.lgx-portable in its flake.
+ * Modules that fail to evaluate or target nothing go to notReleased. */
+def getModuleTargets(List modules) {
+  def systems = PLATFORMS.collect { "\"${it.system}\"" }.join(' ')
+  writeFile(file: '.lgx-targets.nix', text: """
+    p: builtins.filter (s:
+      builtins.hasAttr s p &&
+      (builtins.tryEval ((builtins.getAttr s p) ? "lgx-portable")).value
+    ) [ ${systems} ]
+  """)
+
+  def result = [:]
+  modules.each { m ->
+    try {
+      def out = sh(
+        returnStdout: true,
+        script: "nix eval --json --impure './submodules/${m}#packages' --apply 'import ./.lgx-targets.nix'"
+      )
+      def found = readJSON(text: out.trim()) as List
+      if (found) {
+        result[m] = found
+      } else {
+        notReleased[m] = 'no lgx-portable for any platform'
+      }
+    } catch (ex) {
+      echo "ERROR: flake eval failed for ${m}: ${ex.message}"
+      notReleased[m] = 'flake eval failed'
+    }
+  }
+  return result
+}
+
+def modulesFor(Map platform) {
+  return targets.findAll { m, systems -> platform.system in systems }.keySet() as List
 }
 
 def hasModules() {
