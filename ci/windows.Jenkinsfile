@@ -2,8 +2,9 @@
 
 library 'status-jenkins-lib@v1.10.3'
 
-/* Windows packages are mingw cross builds (packages.x86_64-windows.*),
- * so this runs on the regular Linux x86_64 container agent. */
+/* Windows packages are mingw cross builds, so this runs on the Linux x86_64 agent. */
+VARIANT = 'windows-amd64'
+
 pipeline {
   agent {
     docker {
@@ -17,7 +18,7 @@ pipeline {
   parameters {
     string(
       name: 'MODULES',
-      description: 'Comma-separated submodule dir names to build (required, set by the combined job).',
+      description: 'Comma-separated submodule dir names to build. Required: only the combined job knows which modules target Windows.',
       defaultValue: params.MODULES ?: ''
     )
     string(
@@ -40,25 +41,13 @@ pipeline {
     copyArtifactPermission('/logos/logos-modules-release/*')
   }
 
-  environment {
-    PLATFORM = 'windows/x86_64'
-    VARIANT  = 'windows-amd64'
-    TARGET   = 'x86_64-windows'
-  }
-
   stages {
     stage('Build .lgx') {
-      steps {
-        script {
-          buildAllModules()
-        }
-      }
+      steps { script { buildModules('packages.x86_64-windows.lgx-portable') } }
     }
 
     stage('Archive') {
-      steps {
-        archiveArtifacts(artifacts: 'pkg/*', allowEmptyArchive: false)
-      }
+      steps { archiveArtifacts(artifacts: 'pkg/*') }
     }
   }
 
@@ -70,56 +59,30 @@ pipeline {
   }
 }
 
-def buildAllModules() {
-  sh 'mkdir -p pkg logs'
-  def results = [:]
-  for (String m in getModules()) {
+def buildModules(String attr) {
+  def modules = params.MODULES?.tokenize(', ') ?: error('MODULES is required for the Windows job')
+  def failed = []
+
+  sh 'mkdir -p pkg'
+  modules.each { m ->
     try {
-      buildModule(m)
-      results[m] = 0
+      def out = nix.flake(attr, [path: "./submodules/${m}", link: false])
+      sh """
+        lgx=\$(find '${out}' -maxdepth 2 -name '*.lgx' | head -n1)
+        [ -n "\$lgx" ] || { echo 'no .lgx in build output' >&2; exit 1; }
+        cp "\$lgx" 'pkg/${m}__${VARIANT}.lgx'
+      """
+      echo "OK    ${m}"
     } catch (ex) {
-      results[m] = 1
+      failed << m
       echo "FAIL  ${m}: ${ex.message}"
     }
-    echo "${results[m] == 0 ? 'OK  ' : 'FAIL'}  ${m}"
   }
-  writeReport(results)
 
-  def failed = results.findAll { it.value != 0 }.keySet()
-  if (failed) {
-    unstable("Failed modules on ${env.VARIANT}: ${failed.join(', ')}")
-  }
-  if (results.every { it.value != 0 }) {
-    error("All modules failed on ${env.VARIANT}")
-  }
-}
-
-def getModules() {
-  /* No "empty = all" here: which modules target Windows is decided by
-   * getModuleTargets() in the combined job. */
-  if (!params.MODULES?.trim()) {
-    error('MODULES is required for the Windows job')
-  }
-  return params.MODULES.split(',').collect { it.trim() }.findAll { it }
-}
-
-def buildModule(String module) {
-  def out = nix.flake(
-    "packages.${env.TARGET}.lgx-portable",
-    [path: "./submodules/${module}", link: false]
-  )
-  sh """#!/usr/bin/env bash
-    set -euo pipefail
-    lgx=\$(find '${out}' -maxdepth 2 -name '*.lgx' | head -n1)
-    [[ -n "\$lgx" ]] || { echo 'no .lgx in build output' >&2; exit 1; }
-    cp "\$lgx" 'pkg/${module}__${env.VARIANT}.lgx'
-    chmod u+w 'pkg/${module}__${env.VARIANT}.lgx'
-  """
-}
-
-def writeReport(Map results) {
   writeFile(
-    file: "pkg/report__${env.VARIANT}.txt",
-    text: results.collect { m, c -> "${c == 0 ? 'OK' : 'FAIL'} ${m}" }.join('\n') + '\n'
+    file: "pkg/report__${VARIANT}.txt",
+    text: modules.collect { "${it in failed ? 'FAIL' : 'OK'} ${it}" }.join('\n') + '\n'
   )
+  if (failed == modules) { error("All modules failed on ${VARIANT}") }
+  if (failed) { unstable("Failed modules on ${VARIANT}: ${failed.join(', ')}") }
 }

@@ -2,10 +2,14 @@
 
 library 'status-jenkins-lib@v1.10.3'
 
+/* Shared by both Linux jobs; the arch comes from the job path. */
+ARCH    = env.JOB_NAME.contains('aarch64') ? 'aarch64' : 'x86_64'
+VARIANT = ARCH == 'aarch64' ? 'linux-arm64' : 'linux-amd64'
+
 pipeline {
   agent {
     docker {
-      label getAgentLabel()
+      label ARCH == 'aarch64' ? 'linux-arm-container' : 'linuxcontainer'
       image 'harbor.status.im/infra/ci-build-containers:linux-base-1.0.2'
       args '--volume=/nix:/nix ' +
            '--volume=/etc/nix:/etc/nix '
@@ -38,24 +42,13 @@ pipeline {
     copyArtifactPermission('/logos/logos-modules-release/*')
   }
 
-  environment {
-    PLATFORM = "linux/${getArch()}"
-    VARIANT  = "linux-${getArch() == 'aarch64' ? 'arm64' : 'amd64'}"
-  }
-
   stages {
     stage('Build .lgx') {
-      steps {
-        script {
-          buildAllModules()
-        } 
-      }
+      steps { script { buildModules('lgx-portable') } }
     }
 
     stage('Archive') {
-      steps {
-        archiveArtifacts(artifacts: 'pkg/*', allowEmptyArchive: false)
-      }
+      steps { archiveArtifacts(artifacts: 'pkg/*') }
     }
   }
 
@@ -67,65 +60,31 @@ pipeline {
   }
 }
 
-def buildAllModules() {
-  sh 'mkdir -p pkg logs'
-  def results = [:]
-  for (String m in getModules()) {
+def buildModules(String attr) {
+  def modules = params.MODULES?.tokenize(', ') ?:
+    findFiles(glob: 'submodules/*/metadata.json').collect { it.path.tokenize('/')[1] }.sort()
+  def failed = []
+
+  sh 'mkdir -p pkg'
+  modules.each { m ->
     try {
-      buildModule(m)
-      results[m] = 0
+      def out = nix.flake(attr, [path: "./submodules/${m}", link: false])
+      sh """
+        lgx=\$(find '${out}' -maxdepth 2 -name '*.lgx' | head -n1)
+        [ -n "\$lgx" ] || { echo 'no .lgx in build output' >&2; exit 1; }
+        cp "\$lgx" 'pkg/${m}__${VARIANT}.lgx'
+      """
+      echo "OK    ${m}"
     } catch (ex) {
-      results[m] = 1
+      failed << m
       echo "FAIL  ${m}: ${ex.message}"
     }
-    echo "${results[m] == 0 ? 'OK  ' : 'FAIL'}  ${m}"
   }
-  writeReport(results)
 
-  def failed = results.findAll { it.value != 0 }.keySet()
-  if (failed) {
-    unstable("Failed modules on ${env.VARIANT}: ${failed.join(', ')}")
-  }
-  if (results.every { it.value != 0 }) {
-    error("All modules failed on ${env.VARIANT}")
-  }
-}
-
-def getModules() {
-  if (params.MODULES?.trim()) {
-    return params.MODULES.split(',').collect { it.trim() }.findAll { it }
-  }
-  return sh(
-    script: "find submodules -mindepth 1 -maxdepth 1 -type d | xargs -n1 basename | sort",
-    returnStdout: true
-  ).trim().split('\n') as List
-}
-
-def buildModule(String module) {
-  def out = nix.flake('lgx-portable', [path: "./submodules/${module}", link: false])
-  sh """#!/usr/bin/env bash
-    set -euo pipefail
-    lgx=\$(find '${out}' -maxdepth 2 -name '*.lgx' | head -n1)
-    [[ -n "\$lgx" ]] || { echo 'no .lgx in build output' >&2; exit 1; }
-    cp "\$lgx" 'pkg/${module}__${env.VARIANT}.lgx'
-    chmod u+w 'pkg/${module}__${env.VARIANT}.lgx'
-  """
-}
-
-def writeReport(Map results) {
   writeFile(
-    file: "pkg/report__${env.VARIANT}.txt",
-    text: results.collect { m, c -> "${c == 0 ? 'OK' : 'FAIL'} ${m}" }.join('\n') + '\n'
+    file: "pkg/report__${VARIANT}.txt",
+    text: modules.collect { "${it in failed ? 'FAIL' : 'OK'} ${it}" }.join('\n') + '\n'
   )
-}
-
-def getArch() {
-  def tokens = Thread.currentThread().getName().split('/')
-  for (def arch in ['x86_64', 'aarch64']) {
-    if (tokens.contains(arch)) { return arch }
-  }
-}
-
-def getAgentLabel() {
-  return getArch() == 'aarch64' ? 'linux-arm-container' : 'linuxcontainer'
+  if (failed == modules) { error("All modules failed on ${VARIANT}") }
+  if (failed) { unstable("Failed modules on ${VARIANT}: ${failed.join(', ')}") }
 }
