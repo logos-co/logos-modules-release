@@ -2,37 +2,25 @@
 
 library 'status-jenkins-lib@v1.10.3'
 
-urls = [:]
-
-/* platform name -> [url:, result:], for Discord. */
-platformResults = [:]
-
-/* module -> STORAGE properties written by release-module.sh. */
-storage = [:]
-
-/* module -> published tag. */
-published = [:]
-
-/* Every platform the catalog can build. `system` is the flake system
- * (packages.<system>.lgx-portable), `variant` the pkg/<module>__<variant>.lgx
- * suffix the platform job writes. */
+/* `system` is the flake system (packages.<system>.lgx-portable),
+ * `variant` the pkg/<module>__<variant>.lgx suffix the platform job writes. */
 PLATFORMS = [
-  [name: 'Linux/x86_64',   key: 'Linux',     system: 'x86_64-linux',   variant: 'linux-amd64',
+  [name: 'Linux/x86_64',   system: 'x86_64-linux',   variant: 'linux-amd64',
    job: 'logos/logos-modules-release/systems/linux/x86_64/package'],
-  [name: 'Linux/aarch64',  key: 'Linux-ARM', system: 'aarch64-linux',  variant: 'linux-arm64',
+  [name: 'Linux/aarch64',  system: 'aarch64-linux',  variant: 'linux-arm64',
    job: 'logos/logos-modules-release/systems/linux/aarch64/package'],
-  [name: 'macOS/aarch64',  key: 'macOS',     system: 'aarch64-darwin', variant: 'darwin-arm64',
+  [name: 'macOS/aarch64',  system: 'aarch64-darwin', variant: 'darwin-arm64',
    job: 'logos/logos-modules-release/systems/macos/aarch64/package'],
-  [name: 'Windows/x86_64', key: 'Windows',   system: 'x86_64-windows', variant: 'windows-amd64',
+  [name: 'Windows/x86_64', system: 'x86_64-windows', variant: 'windows-amd64',
    job: 'logos/logos-modules-release/systems/windows/x86_64/package'],
 ]
 
-/* module -> list of flake systems it targets; filled in Setup. */
-targets = [:]
-
-/* module -> reason, for modules that needed a release but didn't get one.
- * They stay unpublished, so the next run retries them. */
-notReleased = [:]
+targets     = [:]  /* module -> flake systems it targets */
+notReleased = [:]  /* module -> reason; retried on the next run */
+storage     = [:]  /* module -> STORAGE written by release-module.sh */
+published   = [:]  /* module -> release tag */
+urls        = [:]  /* platform -> child build URL */
+results     = [:]  /* platform -> child build result */
 
 pipeline {
   agent {
@@ -107,15 +95,14 @@ pipeline {
         def dirs = sh(
           script: "find submodules -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort",
           returnStdout: true
-        ).trim().split('\n') as List
+        ).tokenize('\n')
         def all = dirs.findAll { fileExists("submodules/${it}/metadata.json") }
         def ignored = dirs - all
         if (ignored) {
           echo "WARNING: no metadata.json, ignoring: ${ignored.join(', ')}"
         }
 
-        def requested = params.MODULES?.trim() ?
-          params.MODULES.split(',').collect { it.trim() }.findAll { it } : all
+        def requested = params.MODULES?.tokenize(', ') ?: all
         def unknown = requested - all
         if (unknown) { error("Unknown modules (or missing metadata.json): ${unknown.join(', ')}") }
 
@@ -126,22 +113,19 @@ pipeline {
             usernameVariable: 'GITHUB_USER',
             passwordVariable: 'GH_TOKEN',
           )]) {
-            def output = nix.develop(
+            toBuild = nix.develop(
               keepEnv: ['GH_TOKEN', 'GH_REPO'],
               returnStdout: true,
               "scripts/check-published.sh ${requested.join(' ')}"
-            )
-            toBuild = output.trim() ? output.trim().split('\n') as List : []
+            ).tokenize('\n')
           }
         }
-
-        if (toBuild.isEmpty()) {
+        if (!toBuild) {
           currentBuild.description = 'All requested modules already published'
         }
 
         targets.putAll(getModuleTargets(toBuild))
-        env.BUILD_MODULES = targets.keySet().join(',')
-        echo "Building: ${env.BUILD_MODULES ?: '<none>'}"
+        echo "Building: ${targets.keySet().join(', ') ?: '<none>'}"
         PLATFORMS.each { p ->
           echo "  ${p.name}: ${modulesFor(p).join(', ') ?: '<none>'}"
         }
@@ -149,7 +133,7 @@ pipeline {
     }
 
     stage('Build') {
-      when { expression { hasModules() } }
+      when { expression { targets } }
       steps { script {
         def branches = [:]
         PLATFORMS.each { p ->
@@ -165,22 +149,20 @@ pipeline {
                   string(name: 'BRANCH',  value: params.BRANCH),
                 ],
               )
-              def result = child.result
+              urls[p.name]    = child.absoluteUrl
+              results[p.name] = child.result
+              jenkins.setBuildDesc(urls)
               github.statusUpdate(
                 context: "jenkins/${p.name}",
-                state:   result == 'SUCCESS' ? 'SUCCESS' : 'FAILURE',
-                message: "${result}: ${mods.size()} module(s)",
+                state:   child.result == 'SUCCESS' ? 'SUCCESS' : 'FAILURE',
+                message: "${child.result}: ${mods.size()} module(s)",
                 url:     child.absoluteUrl,
               )
-              urls[p.key] = child.absoluteUrl
-              platformResults[p.name] = [url: child.absoluteUrl, result: result]
-              jenkins.setBuildDesc(urls)
-              /* Copy whatever did build; modules missing a variant are
-               * caught per module in Merge & Sign. */
+              /* Copy whatever did build; Merge & Sign catches missing variants. */
               try {
                 jenkins.copyArts(child)
               } catch (ex) {
-                echo "WARNING: no artifacts from ${p.name} (${result}): ${ex.message}"
+                echo "WARNING: no artifacts from ${p.name} (${child.result}): ${ex.message}"
               }
             }
           }
@@ -190,44 +172,30 @@ pipeline {
     }
 
     stage('Merge & Sign') {
-      when { expression { hasModules() } }
+      when { expression { targets } }
       steps { script {
-        def creds = []
+        def creds = [
+          usernamePassword(credentialsId: 'logos-storage-node-auth-test',
+                           usernameVariable: 'STORAGE_USER_TEST', passwordVariable: 'STORAGE_PASS_TEST'),
+          usernamePassword(credentialsId: 'logos-storage-node-auth-dev',
+                           usernameVariable: 'STORAGE_USER_DEV',  passwordVariable: 'STORAGE_PASS_DEV'),
+        ]
         if (params.SIGN) {
           creds << file(credentialsId: 'logos-lgx-release-signing-key', variable: 'LGX_SIGNING_KEY')
         }
-        if (params.STORAGE_NODES_TEST?.trim()) {
-          creds << usernamePassword(
-            credentialsId:    'logos-storage-node-auth-test',
-            usernameVariable: 'STORAGE_USER_TEST',
-            passwordVariable: 'STORAGE_PASS_TEST',
-          )
-        }
-        if (params.STORAGE_NODES_DEV?.trim()) {
-          creds << usernamePassword(
-            credentialsId:    'logos-storage-node-auth-dev',
-            usernameVariable: 'STORAGE_USER_DEV',
-            passwordVariable: 'STORAGE_PASS_DEV',
-          )
-        }
         withCredentials(creds) {
-          withEnv([
-            "STORAGE_NODES_TEST=${params.STORAGE_NODES_TEST?.trim() ?: ''}",
-            "STORAGE_NODES_DEV=${params.STORAGE_NODES_DEV?.trim() ?: ''}",
-            /* Variants a module doesn't build are listed as missing. */
-            "REQUESTED_VARIANTS=${PLATFORMS.collect { it.variant }.join(',')}",
-          ]) {
-            (env.BUILD_MODULES.split(',') as List).each { m ->
-              /* All or nothing: never publish a module without a variant
-               * it targets - published versions are immutable. */
+          withEnv(["REQUESTED_VARIANTS=${PLATFORMS.collect { it.variant }.join(',')}"]) {
+            targets.each { m, systems ->
+              /* Published versions are immutable - never release with a variant missing. */
               def missing = PLATFORMS
-                .findAll { it.system in targets[m] }
+                .findAll { it.system in systems }
                 .collect { it.variant }
-                .findAll { v -> !fileExists("pkg/${m}__${v}.lgx") }
+                .findAll { !fileExists("pkg/${m}__${it}.lgx") }
               if (missing) {
                 notReleased[m] = "build failed: ${missing.join(', ')}"
                 return
               }
+
               def status = nix.develop(
                 keepEnv: ['LGX_SIGNING_KEY', 'REQUESTED_VARIANTS',
                           'STORAGE_NODES_TEST', 'STORAGE_USER_TEST', 'STORAGE_PASS_TEST',
@@ -235,11 +203,10 @@ pipeline {
                 returnStatus: true,
                 "scripts/release-module.sh ${m} pkg released"
               )
-
-              storage[m] = readStorage(m)
+              def storageFile = "released/${m}/STORAGE"
+              storage[m] = fileExists(storageFile) ? readProperties(file: storageFile) : [:]
               if (status != 0) {
                 notReleased[m] = 'packaging failed'
-                sh "rm -rf 'released/${m}'"
               }
             }
           }
@@ -248,23 +215,22 @@ pipeline {
     }
 
     stage('Publish Releases') {
-      when { expression { hasModules() && params.PUBLISH } }
+      when { expression { targets && params.PUBLISH } }
       steps { script {
-        findFiles(glob: 'released/*/TAG').each { tagFile ->
-          def moddir = tagFile.path.replaceAll('/TAG$', '')
-          def tag    = readFile(tagFile.path).trim()
-          def files  = (findFiles(glob: "${moddir}/*.lgx") as List) +
-                       (findFiles(glob: "${moddir}/sidecar.json") as List)
+        targets.keySet().findAll { !notReleased[it] }.each { m ->
+          def out = "released/${m}"
+          def tag = readFile("${out}/TAG").trim()
           github.upsertRelease(
             user:    env.GH_USER,
             repo:    env.GH_NAME,
             version: tag,
-            name:    readFile("${moddir}/TITLE").trim(),
+            name:    readFile("${out}/TITLE").trim(),
             branch:  env.GIT_COMMIT,
-            desc:    readFile("${moddir}/NOTES").trim(),
-            files:   files,
+            desc:    readFile("${out}/NOTES").trim(),
+            files:   (findFiles(glob: "${out}/*.lgx") as List) +
+                     (findFiles(glob: "${out}/sidecar.json") as List),
           )
-          published[moddir.tokenize('/')[-1]] = tag
+          published[m] = tag
           echo "Published ${tag}"
         }
       } }
@@ -284,7 +250,6 @@ pipeline {
     unsuccessful { script { github.statusUpdate(context: "jenkins/${params.BRANCH}", state: 'FAILURE', message: "Release pipeline ${currentBuild.currentResult}") } }
     always { script {
       archiveArtifacts(artifacts: 'released/**, pkg/report__*', allowEmptyArchive: true)
-      if (urls) { jenkins.setBuildDesc(urls) }
       notifyDiscord()
     } }
     cleanup {
@@ -294,9 +259,8 @@ pipeline {
   }
 }
 
-/* Returns [module: [system, ...]] for every module that targets at least one
- * of PLATFORMS, judged by packages.<system>.lgx-portable in its flake.
- * Modules that fail to evaluate or target nothing go to notReleased. */
+/* Returns [module: [system, ...]] for modules with packages.<system>.lgx-portable
+ * on at least one platform. The rest go to notReleased. */
 def getModuleTargets(List modules) {
   def systems = PLATFORMS.collect { "\"${it.system}\"" }.join(' ')
   writeFile(file: '.lgx-targets.nix', text: """
@@ -309,11 +273,10 @@ def getModuleTargets(List modules) {
   def result = [:]
   modules.each { m ->
     try {
-      def out = sh(
+      def found = readJSON(text: sh(
         returnStdout: true,
         script: "nix eval --json --impure './submodules/${m}#packages' --apply 'import ./.lgx-targets.nix'"
-      )
-      def found = readJSON(text: out.trim()) as List
+      )) as List
       if (found) {
         result[m] = found
       } else {
@@ -331,65 +294,43 @@ def modulesFor(Map platform) {
   return targets.findAll { m, systems -> platform.system in systems }.keySet() as List
 }
 
-def hasModules() {
-  return env.BUILD_MODULES != null && env.BUILD_MODULES != ''
-}
-
-def readStorage(String m) {
-  def f = "released/${m}/STORAGE"
-  return fileExists(f) ? readProperties(file: f) : [:]
-}
-
-def storageStatus(String net, Map st) {
-  if (!params['STORAGE_NODES_' + net.toUpperCase()]?.trim()) { return 'SKIPPED' }
-  switch (st?.get(net)) {
-    case 'ok':      return 'SUCCESS'
-    case 'partial': return 'PARTIAL'
-    case 'failed':  return 'FAILURE'
-    default:        return 'NOT RUN'
-  }
-}
-
 def notifyDiscord() {
   if (!params.PUBLISH) { return }
-  if (!hasModules() && currentBuild.currentResult == 'SUCCESS') { return }
+  if (!targets && currentBuild.currentResult == 'SUCCESS') { return }
 
   def lines = []
-  if (platformResults) {
+  if (urls) {
     lines << '**Platforms:**'
-    platformResults.each { name, p ->
-      lines << "[${name}](${p.url}): `${p.result}`"
-    }
+    urls.each { name, url -> lines << "[${name}](${url}): `${results[name]}`" }
   }
 
-  def modules = ((env.BUILD_MODULES ?: '').tokenize(',') + (notReleased.keySet() as List)).unique()
-  def nodeFailures = [:]
+  def modules = ((targets.keySet() as List) + (notReleased.keySet() as List)).unique()
+  def failedNodes = [:]  /* host -> number of modules */
   if (modules) {
     lines << '**Modules:**'
-    modules.each { m ->
-      def st = storage[m] ?: [:]
-      def state
-      if (published[m])        { state = "PUBLISHED `${published[m]}`" }
-      else if (notReleased[m]) { state = "NOT RELEASED (${notReleased[m]})" }
-      else                     { state = 'NOT PUBLISHED' }
-      def line = "`${m}`: ${state}"
-      if (st) {
-        line += ' | storage ' + ['test', 'dev'].collect {
-          "${it}: `${storageStatus(it, st)}`"
-        }.join(', ')
-      }
-      lines << line
-      ['test', 'dev'].each { net ->
-        st.get(net + '_failed')?.tokenize(',')?.each { url ->
-          def host = url.replaceAll('^https?://', '').replaceAll('/.*$', '')
-          nodeFailures[host] = (nodeFailures[host] ?: 0) + 1
-        }
+  }
+  modules.each { m ->
+    def st = storage[m] ?: [:]
+    def line = "`${m}`: " + (published[m]   ? "PUBLISHED `${published[m]}`" :
+                             notReleased[m] ? "NOT RELEASED (${notReleased[m]})" :
+                                              'NOT PUBLISHED')
+    if (st) {
+      line += ' | storage ' + ['test', 'dev'].collect { net ->
+        "${net}: `${(st[net] ?: 'skipped').toUpperCase()}`"
+      }.join(', ')
+    }
+    lines << line
+
+    ['test', 'dev'].each { net ->
+      st[net + '_failed']?.tokenize(',')?.each { url ->
+        def host = url.replaceAll('^https?://([^/]+).*$', '$1')
+        failedNodes[host] = (failedNodes[host] ?: 0) + 1
       }
     }
   }
-  if (nodeFailures) {
+  if (failedNodes) {
     lines << '**Storage node failures:**'
-    nodeFailures.each { host, n -> lines << "`${host}`: ${n} module(s)" }
+    failedNodes.each { host, n -> lines << "`${host}`: ${n} module(s)" }
   }
 
   try {
