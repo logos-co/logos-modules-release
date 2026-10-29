@@ -23,26 +23,29 @@ Environment:
                                   any not built for this module are listed as
                                   missing, default:
                                   darwin-arm64,linux-amd64,linux-arm64,windows-amd64
-  STORAGE_NODE_URLS   (optional)  comma-separated Logos Storage node base URLs;
-                                  the API path is appended here. Unset = skip
-                                  the storage upload entirely.
-  STORAGE_NETWORKS     (required with STORAGE_NODE_URLS)  network name recorded
-                                  in the sidecar (e.g. logos.test)
-  STORAGE_USER        (required with STORAGE_NODE_URLS)  basic-auth user
-  STORAGE_PASS        (required with STORAGE_NODE_URLS)  basic-auth password
+  STORAGE_NODES_TEST  (optional)  comma-separated logos.test node base URLs
+  STORAGE_NODES_DEV   (optional)  comma-separated logos.dev node base URLs;
+                                  both unset = skip the storage upload.
+                                  Upload failures are never fatal.
+  STORAGE_USER_TEST / STORAGE_PASS_TEST   basic auth for logos.test
+  STORAGE_USER_DEV  / STORAGE_PASS_DEV    basic auth for logos.dev
 
 Produces <out-base-dir>/<module>/:
   - <name>-<version>.lgx    (merged, signed, uploaded to storage)
   - sidecar.json            (must keep this literal name on the release;
-                             carries cid + networks when storage upload ran)
+                             carries cid + networks when storage upload succeeded)
   - TAG                     (release tag:    <name>-v<version>)
   - TITLE                   (release title:  <name> v<version>)
-  - NOTES                   (release description: built vs requested variants)"
+  - NOTES                   (release description: built vs requested variants)
+  - STORAGE                 (per-network upload status + failed nodes, read by Jenkins)"
 
 usage() { printf '%s\n' "$USAGE"; }
 log()   { printf '%s\n' "$*"; }
 warn()  { printf 'WARNING: %s\n' "$*" >&2; }
 die()   { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# Appends key=value to <outdir>/STORAGE (read by Jenkins via readProperties).
+set_storage() { printf '%s=%s\n' "$1" "$2" >> "${outdir}/STORAGE"; }
 
 read_metadata() {
   local meta="submodules/${module}/metadata.json"
@@ -104,13 +107,10 @@ cross_check_manifest() {
   fi
 }
 
-# Uploads the signed package to Logos Storage.
-# STORAGE_NODES_TEST / STORAGE_NODES_DEV: comma-separated node base URLs
-# per network; whichever is set gets uploaded to, both unset skips.
-# Credentials come from STORAGE_USER_TEST/STORAGE_PASS_TEST and
-# STORAGE_USER_DEV/STORAGE_PASS_DEV respectively.
-# Storage is content-addressed, so every node on every network must
-# answer the same CID; a mismatch is a hard error.
+# Uploads the signed package to Logos Storage. Never fatal - Logos Storage
+# isn't stable enough to block a release. A network goes into the sidecar
+# only if at least one of its nodes accepted the upload; if none did, the
+# sidecar has no cid/networks. Status per network goes to <outdir>/STORAGE.
 upload_storage() {
   cid=""
   networks_json='[]'
@@ -119,47 +119,70 @@ upload_storage() {
     return 0
   fi
   local networks=()
-  if [[ -n "${STORAGE_NODES_TEST:-}" ]]; then
-    upload_network 'logos.test' "$STORAGE_NODES_TEST" \
-      "${STORAGE_USER_TEST:-}" "${STORAGE_PASS_TEST:-}"
+  if [[ -n "${STORAGE_NODES_TEST:-}" ]] && upload_network test "$STORAGE_NODES_TEST" \
+       "${STORAGE_USER_TEST:-}" "${STORAGE_PASS_TEST:-}"; then
     networks+=('logos.test')
   fi
-  if [[ -n "${STORAGE_NODES_DEV:-}" ]]; then
-    upload_network 'logos.dev' "$STORAGE_NODES_DEV" \
-      "${STORAGE_USER_DEV:-}" "${STORAGE_PASS_DEV:-}"
+  if [[ -n "${STORAGE_NODES_DEV:-}" ]] && upload_network dev "$STORAGE_NODES_DEV" \
+       "${STORAGE_USER_DEV:-}" "${STORAGE_PASS_DEV:-}"; then
     networks+=('logos.dev')
+  fi
+  if [[ ${#networks[@]} -eq 0 ]]; then
+    warn 'Logos Storage upload failed on every network - releasing without cid'
+    return 0
   fi
   networks_json=$(printf '%s\n' "${networks[@]}" | jq -Rc . | jq -sc .)
   log "uploaded to Logos Storage: cid=${cid} networks=$(IFS=,; echo "${networks[*]}")"
 }
 
-# Uploads $out to every node of one network; sets/checks the global $cid.
+# Uploads $out to every node of logos.<net>. Never fatal: records
+# <net>=ok|partial|failed and <net>_failed=<urls>, returns 1 if no node
+# accepted it. Storage is content-addressed, so any node's CID is the CID.
 upload_network() {
   local net="$1" urls="$2" user="$3" pass="$4"
-  local fname endpoint got ok=0
+  local fname endpoint got ok=0 total=0 failed=()
   fname=$(basename "$out")
-  [[ -n "$user" && -n "$pass" ]] || die "missing credentials for network ${net}"
+  if [[ -z "$user" || -z "$pass" ]]; then
+    warn "missing credentials for logos.${net}"
+    set_storage "$net" failed
+    return 1
+  fi
   for endpoint in ${urls//,/ }; do
+    total=$((total + 1))
     if ! got=$(curl -sS --fail-with-body -X POST \
+                 --connect-timeout 30 --max-time 900 \
                  -H 'Content-Type: application/octet-stream' \
                  -H "Content-Disposition: attachment; filename=\"${fname}\"" \
                  --data-binary @"$out" \
                  --config - \
                  "${endpoint%/}/api/storage/v1/data" 2>&1 \
                  <<<"user = \"${user}:${pass}\""); then
-      warn "storage node refused the upload (${net}: ${endpoint}): ${got}"
+      warn "storage node refused the upload (logos.${net}: ${endpoint}): ${got}"
+      failed+=("$endpoint")
       continue
     fi
     got="${got//[$'\r\n\t ']/}"
-    [[ "$got" =~ ^[A-Za-z0-9]{32,}$ ]] || die "storage node ${endpoint} returned a malformed CID: '${got}'"
-    if [[ -z "$cid" ]]; then
-      cid="$got"
-    elif [[ "$got" != "$cid" ]]; then
-      die "storage CID mismatch: ${endpoint} answered ${got} but another node answered ${cid}"
+    if [[ ! "$got" =~ ^[A-Za-z0-9]{32,}$ ]]; then
+      warn "storage node ${endpoint} returned a malformed CID: '${got}'"
+      failed+=("$endpoint")
+      continue
     fi
+    cid="$got"
     ok=$((ok + 1))
   done
-  [[ "$ok" -gt 0 ]] || die "failed to upload ${fname} to every ${net} node"
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    set_storage "${net}_failed" "$(IFS=,; echo "${failed[*]}")"
+  fi
+  if [[ "$ok" -eq 0 ]]; then
+    warn "failed to upload ${fname} to every logos.${net} node"
+    set_storage "$net" failed
+    return 1
+  fi
+  if [[ "$ok" -eq "$total" ]]; then
+    set_storage "$net" ok
+  else
+    set_storage "$net" partial
+  fi
 }
 
 write_sidecar() {

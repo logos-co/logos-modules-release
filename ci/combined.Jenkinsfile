@@ -4,6 +4,15 @@ library 'status-jenkins-lib@v1.10.3'
 
 urls = [:]
 
+/* platform name -> [url:, result:], for Discord. */
+platformResults = [:]
+
+/* module -> STORAGE properties written by release-module.sh. */
+storage = [:]
+
+/* module -> published tag. */
+published = [:]
+
 /* Every platform the catalog can build. `system` is the flake system
  * (packages.<system>.lgx-portable), `variant` the pkg/<module>__<variant>.lgx
  * suffix the platform job writes. */
@@ -164,6 +173,7 @@ pipeline {
                 url:     child.absoluteUrl,
               )
               urls[p.key] = child.absoluteUrl
+              platformResults[p.name] = [url: child.absoluteUrl, result: result]
               jenkins.setBuildDesc(urls)
               /* Copy whatever did build; modules missing a variant are
                * caught per module in Merge & Sign. */
@@ -225,6 +235,8 @@ pipeline {
                 returnStatus: true,
                 "scripts/release-module.sh ${m} pkg released"
               )
+
+              storage[m] = readStorage(m)
               if (status != 0) {
                 notReleased[m] = 'packaging failed'
                 sh "rm -rf 'released/${m}'"
@@ -252,6 +264,7 @@ pipeline {
             desc:    readFile("${moddir}/NOTES").trim(),
             files:   files,
           )
+          published[moddir.tokenize('/')[-1]] = tag
           echo "Published ${tag}"
         }
       } }
@@ -272,6 +285,7 @@ pipeline {
     always { script {
       archiveArtifacts(artifacts: 'released/**, pkg/report__*', allowEmptyArchive: true)
       if (urls) { jenkins.setBuildDesc(urls) }
+      notifyDiscord()
     } }
     cleanup {
       cleanWs(disableDeferredWipeout: true)
@@ -319,4 +333,71 @@ def modulesFor(Map platform) {
 
 def hasModules() {
   return env.BUILD_MODULES != null && env.BUILD_MODULES != ''
+}
+
+def readStorage(String m) {
+  def f = "released/${m}/STORAGE"
+  return fileExists(f) ? readProperties(file: f) : [:]
+}
+
+def storageStatus(String net, Map st) {
+  if (!params['STORAGE_NODES_' + net.toUpperCase()]?.trim()) { return 'SKIPPED' }
+  switch (st?.get(net)) {
+    case 'ok':      return 'SUCCESS'
+    case 'partial': return 'PARTIAL'
+    case 'failed':  return 'FAILURE'
+    default:        return 'NOT RUN'
+  }
+}
+
+def notifyDiscord() {
+  if (!params.PUBLISH) { return }
+  if (!hasModules() && currentBuild.currentResult == 'SUCCESS') { return }
+
+  def lines = []
+  if (platformResults) {
+    lines << '**Platforms:**'
+    platformResults.each { name, p ->
+      lines << "[${name}](${p.url}): `${p.result}`"
+    }
+  }
+
+  def modules = ((env.BUILD_MODULES ?: '').tokenize(',') + (notReleased.keySet() as List)).unique()
+  def nodeFailures = [:]
+  if (modules) {
+    lines << '**Modules:**'
+    modules.each { m ->
+      def st = storage[m] ?: [:]
+      def state
+      if (published[m])        { state = "PUBLISHED `${published[m]}`" }
+      else if (notReleased[m]) { state = "NOT RELEASED (${notReleased[m]})" }
+      else                     { state = 'NOT PUBLISHED' }
+      def line = "`${m}`: ${state}"
+      if (st) {
+        line += ' | storage ' + ['test', 'dev'].collect {
+          "${it}: `${storageStatus(it, st)}`"
+        }.join(', ')
+      }
+      lines << line
+      ['test', 'dev'].each { net ->
+        st.get(net + '_failed')?.tokenize(',')?.each { url ->
+          def host = url.replaceAll('^https?://', '').replaceAll('/.*$', '')
+          nodeFailures[host] = (nodeFailures[host] ?: 0) + 1
+        }
+      }
+    }
+  }
+  if (nodeFailures) {
+    lines << '**Storage node failures:**'
+    nodeFailures.each { host, n -> lines << "`${host}`: ${n} module(s)" }
+  }
+
+  try {
+    discord.send(
+      cred:    'discord-logos-releases-webhook',
+      descPre: lines.join('\n'),
+    )
+  } catch (ex) {
+    echo "WARNING: Discord notification failed: ${ex.message}"
+  }
 }
