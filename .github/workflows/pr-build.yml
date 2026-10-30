@@ -1,0 +1,199 @@
+name: PR module builds
+
+# Build-check every submodule a pull request modifies, on each platform
+# that submodule's flake exposes — a gate that the change will build on
+# master before it lands.
+#
+# This is CHECKS ONLY. There is no publishing here: the Jenkins pipeline
+# (ci/*.Jenkinsfile) owns building + signing + releasing to the catalog.
+# These jobs only build and push the resulting store paths to the shared
+# `ci` Nix cache, so the eventual Jenkins release build (or a teammate)
+# reuses them instead of rebuilding from scratch.
+#
+# Scope:
+#   * Only submodules whose gitlink changed in the PR are built — a PR
+#     that touches no submodule builds nothing.
+#   * Only the platforms a module's flake actually exposes
+#     (`packages.<system>.lgx-portable`) are attempted — the same probe
+#     the release action and the Jenkins combined job use, so a module
+#     that doesn't define a platform is simply not scheduled there rather
+#     than failing a red leg.
+
+on:
+  pull_request:
+
+# A fresh push to the PR cancels the build still running for it.
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Build + read only; nothing is published, so no write scope.
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    # Work out which submodules changed in this PR and, for each, which
+    # platforms its flake exposes — emitted as a {module, variant, attr}
+    # list the build job fans out over. Runs on the Linux self-hosted
+    # runner for a warm Nix store + cache; the probe only evaluates, it
+    # builds nothing.
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    outputs:
+      # JSON array of {module, variant, attr} objects for the build matrix.
+      matrix: ${{ steps.plan.outputs.matrix }}
+      # "true" when there is at least one (module, variant) to build.
+      any: ${{ steps.plan.outputs.any }}
+    steps:
+      # fetch-depth: 0 so the PR base commit is present for the diff, and
+      # because module flake.nix files use git+file:// inputs that Nix
+      # refuses to evaluate from a shallow clone. submodules are fetched
+      # on demand below, not here — most are irrelevant to any given PR.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: false
+          fetch-depth: 0
+      # Nix + the public Logos substituters for the flake probe. No token
+      # passed: the probe evaluates only, so there is nothing to push.
+      - uses: logos-co/setup-nix-cache-action@781f072122f4df6af0e33a7d355ebd20283e019e # v1.2.0
+      - id: plan
+        name: Plan modified-submodule builds
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Authenticate submodule clones so a private module still fetches
+          # (public ones clone either way). Step-scoped, not --global.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          n="${GIT_CONFIG_COUNT:-0}"
+          export GIT_CONFIG_COUNT=$((n + 1))
+          export "GIT_CONFIG_KEY_${n}=url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+          export "GIT_CONFIG_VALUE_${n}=https://github.com/"
+
+          # Submodule gitlinks that changed between the PR base and head.
+          # A pointer bump shows up as a changed path `submodules/<name>`.
+          # Plain `while read` (not `mapfile`) so this runs on bash 3.2 too.
+          changed=()
+          while IFS= read -r line; do [[ -n "$line" ]] && changed+=("$line"); done \
+            < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'submodules/*' \
+                | awk -F/ 'NF>=2 {print $1"/"$2}' | sort -u)
+          # Paths that are still submodules at HEAD — this drops a submodule
+          # the PR REMOVED (gone from .gitmodules), which has nothing to build.
+          known=()
+          while IFS= read -r line; do [[ -n "$line" ]] && known+=("$line"); done \
+            < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}')
+
+          # Part-1 probe: of our four systems, keep the ones whose flake
+          # exposes an lgx-portable output. hasAttr guards a missing system;
+          # tryEval guards one whose attrset fails to evaluate.
+          filter='p: builtins.filter (s: builtins.hasAttr s p && (builtins.tryEval ((builtins.getAttr s p) ? "lgx-portable")).value) [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-windows" ]'
+          # flake system -> build matrix entry. windows-x86_64 is the mingw
+          # CROSS output at packages.x86_64-windows; the natives build the
+          # runner's own .#lgx-portable.
+          sysmap='{ "x86_64-linux": {"variant":"linux-amd64","attr":".#lgx-portable"}, "aarch64-linux": {"variant":"linux-arm64","attr":".#lgx-portable"}, "aarch64-darwin": {"variant":"darwin-arm64","attr":".#lgx-portable"}, "x86_64-windows": {"variant":"windows-x86_64","attr":".#packages.x86_64-windows.lgx-portable"} }'
+
+          matrix='[]'
+          for path in "${changed[@]:-}"; do
+            [[ -z "$path" ]] && continue
+            # Keep only real submodules still present at HEAD.
+            printf '%s\n' "${known[@]:-}" | grep -qxF "$path" || continue
+            m="${path#submodules/}"
+            git submodule update --init --recursive -- "$path"
+            exposed=$(cd "$path" && nix eval --json --impure ".#packages" --apply "$filter")
+            echo "::notice::${m} exposes lgx-portable for: ${exposed}"
+            entries=$(jq -cn --argjson exposed "$exposed" --arg m "$m" --argjson map "$sysmap" \
+              '[ $exposed[] | $map[.] | select(. != null) | {module: $m, variant: .variant, attr: .attr} ]')
+            matrix=$(jq -cn --argjson a "$matrix" --argjson b "$entries" '$a + $b')
+          done
+
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          if [[ "$matrix" == "[]" ]]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No modified submodules with buildable variants — nothing to build."
+          else
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    strategy:
+      # One leg can fail (a broken derivation) without aborting the others,
+      # so a PR touching several modules reports every failure at once.
+      fail-fast: false
+      # Dynamic matrix: one job per {module, variant} the detect job found.
+      matrix:
+        include: ${{ fromJson(needs.detect.outputs.matrix) }}
+    # Self-hosted runners, matching the labels the release build config
+    # (vars.RELEASE_BUILD_RUNNERS) uses, but spelled out here so this
+    # workflow doesn't depend on that RELEASE-era variable still existing:
+    #   linux-amd64, windows-x86_64 -> [self-hosted, Linux, X64]
+    #     (windows-x86_64 is a mingw CROSS build — a Linux job emits the PE)
+    #   darwin-arm64                -> [self-hosted, macOS, ARM64]
+    #   linux-arm64                 -> ubuntu-24.04-arm (no self-hosted
+    #     aarch64-linux runner exists; GitHub-hosted ARM covers it)
+    # The trailing ubuntu-latest is an unreachable guard — detect only ever
+    # emits the four known variants.
+    #
+    # NB: in a `>-` folded scalar every continuation line MUST keep the
+    # first line's indentation; a more-indented line embeds a literal
+    # newline into the ${{ }} expression.
+    runs-on: >-
+      ${{ (matrix.variant == 'linux-amd64' || matrix.variant == 'windows-x86_64')
+      && fromJSON('["self-hosted", "Linux", "X64"]')
+      || matrix.variant == 'darwin-arm64' && fromJSON('["self-hosted", "macOS", "ARM64"]')
+      || matrix.variant == 'linux-arm64' && 'ubuntu-24.04-arm'
+      || 'ubuntu-latest' }}
+    name: build ${{ matrix.module }} (${{ matrix.variant }})
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: false
+          fetch-depth: 0
+      - name: Check out the target submodule
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODULE: ${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          n="${GIT_CONFIG_COUNT:-0}"
+          export GIT_CONFIG_COUNT=$((n + 1))
+          export "GIT_CONFIG_KEY_${n}=url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+          export "GIT_CONFIG_VALUE_${n}=https://github.com/"
+          git submodule update --init --recursive -- "submodules/${MODULE}"
+      # Installs Nix (+ the Logos substituters) and, because a PR ref is
+      # never the default branch, pushes what this job builds to the `ci`
+      # Attic cache. A fork PR has no ATTIC_TOKEN_CI, so it builds reading
+      # the cache and simply pushes nothing.
+      - uses: logos-co/setup-nix-cache-action@781f072122f4df6af0e33a7d355ebd20283e019e # v1.2.0
+        with:
+          attic-token-ci: ${{ secrets.ATTIC_TOKEN_CI }}
+      - name: Ensure Metal Toolchain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if /usr/bin/xcrun metal --version >/dev/null 2>&1; then
+            echo "Metal Toolchain present"
+            exit 0
+          fi
+          echo "Metal Toolchain missing, downloading..."
+          xcodebuild -downloadComponent MetalToolchain
+          /usr/bin/xcrun metal --version
+      - name: Build ${{ matrix.attr }}
+        shell: bash
+        env:
+          MODULE: ${{ matrix.module }}
+          ATTR: ${{ matrix.attr }}
+        run: |
+          set -euo pipefail
+          cd "submodules/${MODULE}"
+          # Build the PORTABLE bundle, matching the release path. --no-link:
+          # we only care that it builds (and lands in the cache via the
+          # action's post-step), not about keeping the result here.
+          nix build "$ATTR" --no-link --print-out-paths -L
