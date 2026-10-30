@@ -1,0 +1,130 @@
+name: PR module builds
+
+# Build-check every submodule a pull request modifies, on each platform
+# that submodule's flake exposes — a gate that the change will build on
+# master before it lands — and offer the resulting package for download.
+#
+# This is CHECKS ONLY: nothing is signed or published. The Jenkins
+# pipeline (ci/*.Jenkinsfile) still owns releasing to the catalog. Each
+# modified module is handed to the release action in its build-only mode
+# (`publish: false`), which:
+#   * builds only the platforms the module's flake exposes
+#     (`packages.<system>.lgx-portable`) — a platform a module doesn't
+#     define is skipped, not failed;
+#   * pushes the build outputs to the shared `ci` Nix cache, so the later
+#     Jenkins release build reuses them;
+#   * merges + verifies the variants and uploads the unsigned
+#     `<module>-<version>.lgx` as an artifact on this run, for reviewers
+#     to download and try.
+#
+# Only submodules whose gitlink changed in the PR are built — a PR that
+# touches no submodule builds nothing.
+
+on:
+  pull_request:
+
+# A fresh push to the PR cancels the build still running for it.
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    # Which submodules changed in this PR — just their names; the action
+    # works out which platforms each one exposes. A plain git diff, so it
+    # runs on a GitHub-hosted runner and doesn't occupy a build machine.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      # JSON array of submodule directory names, e.g. ["logos-chat-module"].
+      modules: ${{ steps.changed.outputs.modules }}
+      # "true" when at least one module needs building.
+      any: ${{ steps.changed.outputs.any }}
+    steps:
+      # fetch-depth: 0 so the PR base commit is present for the diff. The
+      # submodules themselves aren't needed here, only their gitlinks.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: false
+          fetch-depth: 0
+      - id: changed
+        name: List modified submodules
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Submodule gitlinks that changed between the PR base and head.
+          # A pointer bump shows up as a changed path `submodules/<name>`.
+          # Plain `while read` (not `mapfile`) so this runs on bash 3.2 too.
+          changed=()
+          while IFS= read -r line; do [[ -n "$line" ]] && changed+=("$line"); done \
+            < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- 'submodules/*' \
+                | awk -F/ 'NF>=2 {print $1"/"$2}' | sort -u)
+          # Paths that are still submodules at HEAD — this drops a submodule
+          # the PR REMOVED (gone from .gitmodules), which has nothing to build.
+          known=()
+          while IFS= read -r line; do [[ -n "$line" ]] && known+=("$line"); done \
+            < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{print $2}')
+
+          modules='[]'
+          for path in "${changed[@]:-}"; do
+            [[ -z "$path" ]] && continue
+            printf '%s\n' "${known[@]:-}" | grep -qxF "$path" || continue
+            modules=$(jq -c --arg m "${path#submodules/}" '. + [$m]' <<<"$modules")
+          done
+
+          echo "modules=$modules" >> "$GITHUB_OUTPUT"
+          if [[ "$modules" == "[]" ]]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No modified submodules — nothing to build."
+          else
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Building: $(jq -r 'join(", ")' <<<"$modules")"
+          fi
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    strategy:
+      # One module failing doesn't cancel the others, so a PR touching
+      # several modules reports every failure at once.
+      fail-fast: false
+      matrix:
+        module: ${{ fromJson(needs.detect.outputs.modules) }}
+    # The called workflow's release job declares `contents: write` (it
+    # needs it to publish), and a reusable workflow can't be granted less
+    # than it declares. With `publish: false` nothing is written: the
+    # sign / storage / release / tag / index steps are all skipped.
+    permissions:
+      contents: write
+    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.12
+    with:
+      module_path: submodules/${{ matrix.module }}
+      # The upper bound — the action keeps only the variants the module's
+      # flake exposes. windows-x86_64 must be listed explicitly: it isn't
+      # in the action's default variant list.
+      variants: darwin-arm64,linux-amd64,linux-arm64,windows-x86_64
+      publish: false
+      # A check always builds, even for a version that's already released.
+      skip_if_published: false
+      # Our self-hosted runners. windows-x86_64 is a mingw CROSS build, so
+      # it runs on the Linux X64 runner. linux-arm64 has no self-hosted
+      # runner and falls back to the action's GitHub-hosted
+      # ubuntu-24.04-arm.
+      build_runners: >-
+        {"linux-amd64": ["self-hosted", "Linux", "X64"],
+        "windows-x86_64": ["self-hosted", "Linux", "X64"],
+        "darwin-arm64": ["self-hosted", "macOS", "ARM64"]}
+      # setup (flake probe) and the merge job run on the Linux self-hosted
+      # runner too, for a warm Nix store.
+      runner: '["self-hosted", "Linux", "X64"]'
+    secrets:
+      # Pushes the build outputs to the `ci` cache (a PR ref is never the
+      # default branch). Empty on fork PRs: they build reading the cache
+      # and push nothing.
+      ATTIC_TOKEN_CI: ${{ secrets.ATTIC_TOKEN_CI }}
