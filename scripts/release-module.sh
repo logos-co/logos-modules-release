@@ -84,6 +84,15 @@ check_manifest() {
     || die "manifest drift: metadata.json ${name}@${ver} vs .lgx ${found} (bump metadata.json with the submodule)"
 }
 
+# A field the tooling does not know is dropped when it merges and signs, and
+# the package ships without it: `backend` did, before logos-package 0.7.0.
+check_fields_kept() {
+  local lost f
+  lost=$(for f in "${vdir}/${module}__"*.lgx; do lgx manifest "$f" --json; done \
+    | jq -rs --argjson out "$manifest" '(map(keys) | add | unique) - ($out | keys) | join(", ")')
+  [[ -z "$lost" ]] || die "manifest field(s) dropped by the release tooling: ${lost} (update logos-package in flake.lock)"
+}
+
 upload_storage() {
   cid=""
   networks=()
@@ -188,6 +197,7 @@ main() {
   lgx verify "$out"
   sign_package
   check_manifest
+  check_fields_kept
   upload_storage
   write_sidecar
   write_release_meta
