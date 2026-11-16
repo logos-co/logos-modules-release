@@ -113,16 +113,16 @@ jobs:
       # A check always builds, even for a version that's already released.
       skip_if_published: false
       # Our self-hosted runners. windows-x86_64 is a mingw CROSS build, so
-      # it runs on the Linux X64 runner. linux-arm64 has no self-hosted
-      # runner and falls back to the action's GitHub-hosted
+      # it runs on the bladerunner-linux runner. linux-arm64 has no
+      # self-hosted runner and falls back to the action's GitHub-hosted
       # ubuntu-24.04-arm.
       build_runners: >-
-        {"linux-amd64": ["self-hosted", "Linux", "X64"],
-        "windows-x86_64": ["self-hosted", "Linux", "X64"],
-        "darwin-arm64": ["self-hosted", "macOS", "ARM64"]}
+        {"linux-amd64": "bladerunner-linux",
+        "windows-x86_64": "bladerunner-linux",
+        "darwin-arm64": "bladerunner-macos"}
       # setup (flake probe) and the merge job run on the Linux self-hosted
       # runner too, for a warm Nix store.
-      runner: '["self-hosted", "Linux", "X64"]'
+      runner: bladerunner-linux
     secrets:
       # Pushes the build outputs to the `ci` cache (a PR ref is never the
       # default branch). Empty on fork PRs: they build reading the cache
