@@ -1,0 +1,59 @@
+name: _release-module
+
+# TEMPORARY fallback while the Jenkins release pipeline (ci/*.Jenkinsfile)
+# is down: builds and publishes ONE module through GitHub Actions, UNSIGNED.
+# Jenkins stays the real release path; nothing here runs on its own (every
+# caller is workflow_dispatch). See "GitHub Actions fallback" in README.md.
+#
+# Taken from logos-modules-release-base (33fb564). Differences: the action is
+# pinned to the version pr-build.yml uses, runners match pr-build.yml (hosted
+# runners run out of memory on the Windows cross build), and the Logos
+# Storage nodes get the .lgx as in the Jenkins release.
+#
+# Private (workflow_call only): callers are release-<module>.yml and
+# release-all.yml.
+
+on:
+  workflow_call:
+    inputs:
+      module_path:
+        description: "Path to the module (e.g. submodules/<repo>)."
+        type: string
+        required: true
+      force_build:
+        description: |
+          Republish an already-published `<module>-v<version>` release
+          instead of skipping it. That REPLACES a signed Jenkins release
+          with an unsigned one.
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: logos-co/logos-modules-release-action/.github/workflows/release.yml@v1.12
+    with:
+      module_path: ${{ inputs.module_path }}
+      # A version that is already fully published (e.g. signed by Jenkins)
+      # is skipped unless force_build.
+      skip_if_published: ${{ !inputs.force_build }}
+      # The upper bound: the action keeps only the platforms the module's
+      # flake exposes. windows-x86_64 is opt-in upstream, so it is listed.
+      variants: "darwin-arm64,linux-amd64,linux-arm64,windows-x86_64"
+      # Same runners as pr-build.yml. linux-arm64 has no self-hosted runner
+      # and falls back to GitHub-hosted ubuntu-24.04-arm.
+      runner: bladerunner-linux
+      build_runners: >-
+        {"linux-amd64": "bladerunner-linux",
+        "windows-x86_64": "bladerunner-linux",
+        "darwin-arm64": "bladerunner-macos"}
+      cache_environment: ${{ vars.ATTIC_ENDPOINT && 'public-cache' || '' }}
+      # Unsigned: the signing key lives only in Jenkins.
+      signing_mode: none
+    secrets:
+      ATTIC_TOKEN_CI: ${{ secrets.ATTIC_TOKEN_CI }}
+      ATTIC_TOKEN_PUBLIC: ${{ secrets.ATTIC_TOKEN_PUBLIC }}
+      # A failed storage upload is a warning in the action, not a failure.
+      storage_nodes: ${{ secrets.STORAGE_NODES }}
