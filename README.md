@@ -120,6 +120,22 @@ Published versions are **immutable**: the pipeline skips anything already
 fully released, so changing a module's content without bumping its version
 ships nothing.
 
+### GitHub Actions fallback (temporary, unsigned)
+
+While the Jenkins runners are down, a module can be released from the
+Actions tab instead: `Release <module>` for one module, or **Release all
+modules** for every one (`./scripts/catalog.sh release <module>` /
+`release-all` do the same from a shell). These run only when triggered by
+hand and publish the same `<name>-v<version>` release, **unsigned**: the
+signing key exists only in Jenkins. A version that is already published is
+skipped, so signed releases are left alone; **Force build** replaces one with
+an unsigned build.
+
+When Jenkins is back, re-release every version the fallback published, so
+it is signed: run the Jenkins pipeline with those modules in `MODULES` and
+`SKIP_IF_PUBLISHED` off. With it on, Jenkins treats them as already released
+and they stay unsigned.
+
 ## Unpublishing a module or version
 
 Removal stays on GitHub Actions: run the **Unpublish module / version**

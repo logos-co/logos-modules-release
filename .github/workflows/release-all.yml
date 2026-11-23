@@ -1,0 +1,78 @@
+name: Release all modules
+
+# TEMPORARY fallback while Jenkins is down: releases every module in this
+# catalog through GitHub Actions, UNSIGNED. See "GitHub Actions fallback" in
+# README.md. Versions already published (e.g. signed by Jenkins) are skipped
+# unless force_build.
+#
+# Modules are discovered from .gitmodules at run time: a submodule with a
+# root metadata.json is one module; one without (a multi-module repo such as
+# logos-rln-modules) contributes each top-level directory that has one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Force build — replace the published release of the same version (replaces signed Jenkins releases with unsigned ones)."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.scan.outputs.matrix }}
+      count: ${{ steps.scan.outputs.count }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - id: scan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Reads each submodule's tree at its pinned commit through the API,
+          # rather than cloning every submodule.
+          has_meta() { gh api "repos/$1/contents/$2metadata.json?ref=$3" --silent 2>/dev/null; }
+          found=()
+          while read -r key path; do
+            name=${key#submodule.}; name=${name%.path}
+            url=$(git config --file .gitmodules "submodule.${name}.url")
+            slug=$(sed -E 's#^(https://github.com/|git@github.com:)##; s#\.git$##' <<<"$url")
+            sha=$(git ls-tree HEAD "$path" | awk '{print $3}')
+            if has_meta "$slug" "" "$sha"; then found+=("$path"); continue; fi
+            subs=()
+            for d in $(gh api "repos/${slug}/contents?ref=${sha}" --jq '.[] | select(.type=="dir") | .name'); do
+              if has_meta "$slug" "${d}/" "$sha"; then subs+=("${path}/${d}"); fi
+            done
+            if [ ${#subs[@]} -eq 0 ]; then
+              echo "::warning::${path}: no metadata.json at its root or in a top-level directory — skipped"
+            else
+              found+=("${subs[@]}")
+            fi
+          done < <(git config --file .gitmodules --get-regexp '^submodule\..*\.path$' | sort -k2)
+          count=${#found[@]}
+          if [ "$count" -eq 0 ]; then
+            matrix='{"module_path":[]}'
+          else
+            matrix=$(printf '%s\n' "${found[@]}" | jq -R . | jq -cs '{module_path: .}')
+          fi
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "Discovered ${count} module(s):"
+          printf '  %s\n' "${found[@]:-}"
+
+  release:
+    needs: discover
+    if: ${{ needs.discover.outputs.count != '0' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    uses: ./.github/workflows/_release-module.yml
+    with:
+      module_path: ${{ matrix.module_path }}
+      force_build: ${{ inputs.force_build }}
+    secrets: inherit
