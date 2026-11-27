@@ -82,6 +82,9 @@
 [submodule "submodules/logos-evm-token-list-module"]
 	path = submodules/logos-evm-token-list-module
 	url = https://github.com/logos-co/logos-evm-token-list-module
+[submodule "submodules/logos-evm-beacon-api-module"]
+	path = submodules/logos-evm-beacon-api-module
+	url = https://github.com/logos-co/logos-evm-beacon-api-module
 [submodule "submodules/logos-verified-proxy-module"]
 	path = submodules/logos-verified-proxy-module
 	url = https://github.com/logos-co/logos-verified-proxy-module

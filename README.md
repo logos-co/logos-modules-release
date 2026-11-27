@@ -55,6 +55,7 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-eth-wallet-backend` | logos-co |
 | `logos-eth-wallet-ui` | logos-co |
 | `logos-evm-assets-module` | logos-co |
+| `logos-evm-beacon-api-module` | logos-co |
 | `logos-evm-eth-rpc-module` | logos-co |
 | `logos-evm-fee-module` | logos-co |
 | `logos-evm-keystore-cli` | logos-co |
