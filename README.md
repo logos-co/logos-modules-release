@@ -84,6 +84,46 @@ by fetching `logos-repo.json` from the default branch root.
 | `logos-monerod-module` | logos-co |
 | `logos-monerod-ui` | logos-co |
 
+### Bitcoin Wallet
+
+| Module | Source |
+|---|---|
+| `logos-bitcoin-node-module` | logos-co |
+| `logos-bitcoin-wallet-backend` | logos-co |
+| `logos-bitcoin-wallet-cli` | logos-co |
+| `logos-bitcoin-wallet-core-module` | logos-co |
+| `logos-bitcoin-wallet-ui` | logos-co |
+| `logos-bitcoind-module` | logos-co |
+| `logos-bitcoind-ui` | logos-co |
+
+### Zcash Wallet
+
+| Module | Source |
+|---|---|
+| `logos-zcash-node-module` | logos-co |
+| `logos-zcash-wallet-backend` | logos-co |
+| `logos-zcash-wallet-cli` | logos-co |
+| `logos-zcash-wallet-core-module` | logos-co |
+| `logos-zcash-wallet-ui` | logos-co |
+| `logos-zebrad-module` | logos-co |
+| `logos-zebrad-ui` | logos-co |
+
+### Signers
+
+| Module | Source |
+|---|---|
+| `logos-keycard-module` | logos-co |
+| `logos-keycard-shell-module` | logos-co |
+| `logos-keycard-ui` | logos-co |
+| `logos-signer-manager-module` | logos-co |
+
+### Tor
+
+| Module | Source |
+|---|---|
+| `logos-tor-module` | logos-co |
+| `logos-tor-ui` | logos-co |
+
 ### Others
 
 | Module | Source |

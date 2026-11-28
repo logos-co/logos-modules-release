@@ -165,3 +165,63 @@
 [submodule "submodules/logos-twap-oracle-module"]
 	path = submodules/logos-twap-oracle-module
 	url = https://github.com/logos-blockchain/logos-twap-oracle-module
+[submodule "submodules/logos-bitcoin-node-module"]
+	path = submodules/logos-bitcoin-node-module
+	url = https://github.com/logos-co/logos-bitcoin-node-module
+[submodule "submodules/logos-bitcoin-wallet-backend"]
+	path = submodules/logos-bitcoin-wallet-backend
+	url = https://github.com/logos-co/logos-bitcoin-wallet-backend
+[submodule "submodules/logos-bitcoin-wallet-cli"]
+	path = submodules/logos-bitcoin-wallet-cli
+	url = https://github.com/logos-co/logos-bitcoin-wallet-cli
+[submodule "submodules/logos-bitcoin-wallet-core-module"]
+	path = submodules/logos-bitcoin-wallet-core-module
+	url = https://github.com/logos-co/logos-bitcoin-wallet-core-module
+[submodule "submodules/logos-bitcoin-wallet-ui"]
+	path = submodules/logos-bitcoin-wallet-ui
+	url = https://github.com/logos-co/logos-bitcoin-wallet-ui
+[submodule "submodules/logos-bitcoind-module"]
+	path = submodules/logos-bitcoind-module
+	url = https://github.com/logos-co/logos-bitcoind-module
+[submodule "submodules/logos-bitcoind-ui"]
+	path = submodules/logos-bitcoind-ui
+	url = https://github.com/logos-co/logos-bitcoind-ui
+[submodule "submodules/logos-keycard-module"]
+	path = submodules/logos-keycard-module
+	url = https://github.com/logos-co/logos-keycard-module
+[submodule "submodules/logos-keycard-shell-module"]
+	path = submodules/logos-keycard-shell-module
+	url = https://github.com/logos-co/logos-keycard-shell-module
+[submodule "submodules/logos-keycard-ui"]
+	path = submodules/logos-keycard-ui
+	url = https://github.com/logos-co/logos-keycard-ui
+[submodule "submodules/logos-signer-manager-module"]
+	path = submodules/logos-signer-manager-module
+	url = https://github.com/logos-co/logos-signer-manager-module
+[submodule "submodules/logos-tor-module"]
+	path = submodules/logos-tor-module
+	url = https://github.com/logos-co/logos-tor-module
+[submodule "submodules/logos-tor-ui"]
+	path = submodules/logos-tor-ui
+	url = https://github.com/logos-co/logos-tor-ui
+[submodule "submodules/logos-zcash-node-module"]
+	path = submodules/logos-zcash-node-module
+	url = https://github.com/logos-co/logos-zcash-node-module
+[submodule "submodules/logos-zcash-wallet-backend"]
+	path = submodules/logos-zcash-wallet-backend
+	url = https://github.com/logos-co/logos-zcash-wallet-backend
+[submodule "submodules/logos-zcash-wallet-cli"]
+	path = submodules/logos-zcash-wallet-cli
+	url = https://github.com/logos-co/logos-zcash-wallet-cli
+[submodule "submodules/logos-zcash-wallet-core-module"]
+	path = submodules/logos-zcash-wallet-core-module
+	url = https://github.com/logos-co/logos-zcash-wallet-core-module
+[submodule "submodules/logos-zcash-wallet-ui"]
+	path = submodules/logos-zcash-wallet-ui
+	url = https://github.com/logos-co/logos-zcash-wallet-ui
+[submodule "submodules/logos-zebrad-module"]
+	path = submodules/logos-zebrad-module
+	url = https://github.com/logos-co/logos-zebrad-module
+[submodule "submodules/logos-zebrad-ui"]
+	path = submodules/logos-zebrad-ui
+	url = https://github.com/logos-co/logos-zebrad-ui
